@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agents</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #12110f;
+            --bg-raised: #1c1a17;
+            --bg-input: #0d0c0b;
+            --border: #2a2723;
+            --border-light: #3a3630;
+            --text: #d8d0c4;
+            --text-dim: #8a8279;
+            --text-faint: #5c564e;
+            --accent: #c9a94e;
+            --accent-dim: #8a7535;
+            --red: #c45c4a;
+            --green: #6b9a5c;
+            --amber: #c9a94e;
+            --blue: #5c8ab0;
+            --serif: 'Instrument Serif', Georgia, serif;
+            --sans: 'DM Sans', system-ui, sans-serif;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--sans);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 15px;
+            line-height: 1.5;
+            min-height: 100dvh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .shell {
+            max-width: 640px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* --- Header --- */
+
+        .header {
+            padding: 24px 0 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+        }
+
+        .header h1 {
+            font-family: var(--serif);
+            font-weight: 400;
+            font-size: clamp(1.6rem, 5vw, 2rem);
+            letter-spacing: -0.02em;
+            color: var(--text);
+            font-style: italic;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+
+        .conn-dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--text-faint);
+            transition: background 0.4s;
+        }
+        .conn-dot.live { background: var(--green); }
+
+        /* --- Buttons --- */
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border: 1px solid var(--border-light);
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text);
+            font-family: var(--sans);
+            font-size: 13px;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            white-space: nowrap;
+        }
+        .btn:hover { background: var(--bg-raised); border-color: var(--text-faint); }
+        .btn:active { transform: scale(0.98); }
+
+        .btn--accent {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--bg);
+            font-weight: 600;
+        }
+        .btn--accent:hover { background: var(--accent-dim); border-color: var(--accent-dim); color: var(--text); }
+
+        .btn--danger {
+            border-color: var(--red);
+            color: var(--red);
+        }
+        .btn--danger:hover { background: color-mix(in oklch, var(--red), transparent 88%); }
+
+        .btn--approve {
+            border-color: var(--green);
+            color: var(--green);
+        }
+        .btn--approve:hover { background: color-mix(in oklch, var(--green), transparent 88%); }
+
+        .btn--ghost {
+            border: none;
+            padding: 8px 12px;
+            color: var(--text-dim);
+        }
+        .btn--ghost:hover { color: var(--text); background: transparent; }
+
+        .btn--sm { padding: 5px 10px; font-size: 12px; }
+
+        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        /* --- Forms --- */
+
+        .field { margin-bottom: 20px; }
+        .field label {
+            display: block;
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+
+        .field input, .field textarea, .field select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-input);
+            color: var(--text);
+            font-family: var(--sans);
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        .field input:focus, .field textarea:focus, .field select:focus {
+            outline: none;
+            border-color: var(--accent-dim);
+        }
+        .field textarea { resize: vertical; min-height: 100px; line-height: 1.6; }
+        .field select { appearance: none; cursor: pointer; }
+
+        /* --- Task List --- */
+
+        .task-item {
+            padding: 16px 0;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .task-item:first-child { border-top: 1px solid var(--border); }
+        .task-item:hover { opacity: 0.8; }
+        .task-item:active { opacity: 0.6; }
+
+        .task-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 12px;
+        }
+
+        .task-title {
+            font-family: var(--serif);
+            font-size: clamp(1.1rem, 3vw, 1.3rem);
+            font-weight: 400;
+            color: var(--text);
+            line-height: 1.3;
+        }
+
+        .task-meta {
+            margin-top: 4px;
+            font-size: 12px;
+            color: var(--text-faint);
+            letter-spacing: 0.01em;
+        }
+
+        .status-tag {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .st-pending { color: var(--text-faint); }
+        .st-running { color: var(--green); }
+        .st-paused { color: var(--amber); }
+        .st-needs_review { color: var(--red); }
+        .st-completed { color: var(--blue); }
+        .st-failed { color: var(--red); }
+
+        /* Running indicator */
+        .st-running::before {
+            content: '';
+            display: inline-block;
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            background: var(--green);
+            margin-right: 5px;
+            vertical-align: middle;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* --- Empty State --- */
+
+        .empty {
+            padding: 60px 0 40px;
+            text-align: left;
+        }
+        .empty h2 {
+            font-family: var(--serif);
+            font-size: 1.5rem;
+            font-weight: 400;
+            font-style: italic;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+        }
+        .empty p {
+            font-size: 14px;
+            color: var(--text-faint);
+            max-width: 380px;
+            line-height: 1.6;
+        }
+
+        /* --- Detail View --- */
+
+        .detail-title {
+            font-family: var(--serif);
+            font-size: clamp(1.4rem, 5vw, 1.8rem);
+            font-weight: 400;
+            line-height: 1.2;
+            margin-bottom: 4px;
+        }
+
+        .detail-desc {
+            font-size: 14px;
+            color: var(--text-dim);
+            line-height: 1.6;
+            margin: 8px 0 4px;
+        }
+
+        .detail-meta {
+            font-size: 12px;
+            color: var(--text-faint);
+            margin-bottom: 16px;
+        }
+
+        .section {
+            padding: 20px 0 0;
+        }
+
+        .section-label {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-faint);
+            margin-bottom: 12px;
+        }
+
+        /* --- Terminal --- */
+
+        .terminal {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 14px;
+            font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            color: var(--text-dim);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 360px;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-light) transparent;
+        }
+
+        /* --- Diff --- */
+
+        .diff {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 14px;
+            font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 12px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 480px;
+            overflow-y: auto;
+            margin-bottom: 12px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-light) transparent;
+        }
+        .d-add { color: var(--green); }
+        .d-del { color: var(--red); }
+        .d-hdr { color: var(--blue); }
+
+        /* --- Updates --- */
+
+        .update {
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            line-height: 1.5;
+            display: flex;
+            gap: 10px;
+        }
+        .update:last-child { border-bottom: none; }
+
+        .update-tag {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            flex-shrink: 0;
+            padding-top: 2px;
+        }
+        .ut-progress { color: var(--blue); }
+        .ut-commit { color: var(--green); }
+        .ut-error { color: var(--red); }
+        .ut-summary { color: var(--accent); }
+
+        .update-body { color: var(--text-dim); flex: 1; min-width: 0; }
+        .update-sha {
+            font-family: 'SF Mono', monospace;
+            font-size: 11px;
+            color: var(--green);
+            margin-left: 4px;
+        }
+        .update-time {
+            font-size: 11px;
+            color: var(--text-faint);
+            flex-shrink: 0;
+        }
+
+        /* --- Messages --- */
+
+        .messages {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .msg {
+            max-width: 85%;
+            padding: 10px 14px;
+            font-size: 14px;
+            line-height: 1.5;
+            border-radius: 4px;
+        }
+        .msg--out {
+            align-self: flex-end;
+            background: var(--accent-dim);
+            color: var(--text);
+            border-bottom-right-radius: 0;
+        }
+        .msg--in {
+            align-self: flex-start;
+            background: var(--bg-raised);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            border-bottom-left-radius: 0;
+        }
+        .msg-time {
+            font-size: 10px;
+            color: var(--text-faint);
+            margin-top: 4px;
+        }
+
+        .msg-composer {
+            display: flex;
+            gap: 8px;
+        }
+        .msg-composer input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-input);
+            color: var(--text);
+            font-family: var(--sans);
+            font-size: 14px;
+        }
+        .msg-composer input:focus { outline: none; border-color: var(--accent-dim); }
+
+        /* --- Login --- */
+
+        .login-shell {
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            max-width: 340px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        .login-shell h1 {
+            font-family: var(--serif);
+            font-size: 2.4rem;
+            font-weight: 400;
+            font-style: italic;
+            margin-bottom: 32px;
+            letter-spacing: -0.02em;
+        }
+
+        .login-error {
+            font-size: 13px;
+            color: var(--red);
+            margin-top: 10px;
+        }
+
+        /* --- Back nav --- */
+
+        .back {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 13px;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 12px 0 16px;
+            border: none;
+            background: none;
+            font-family: var(--sans);
+            letter-spacing: 0.01em;
+        }
+        .back:hover { color: var(--text); }
+        .back svg { width: 14px; height: 14px; }
+
+        /* --- Toast --- */
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(20px);
+            padding: 10px 20px;
+            background: var(--bg-raised);
+            border: 1px solid var(--border-light);
+            border-radius: 4px;
+            font-size: 13px;
+            color: var(--text);
+            opacity: 0;
+            transition: opacity 0.25s ease-out, transform 0.25s ease-out;
+            pointer-events: none;
+            z-index: 100;
+            max-width: 90vw;
+            text-align: center;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* --- Utilities --- */
+
+        .hidden { display: none !important; }
+        .sep { height: 1px; background: var(--border); margin: 20px 0; }
+
+        /* --- Entrance animation --- */
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-in {
+            animation: fadeUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        .delay-1 { animation-delay: 0.04s; }
+        .delay-2 { animation-delay: 0.08s; }
+        .delay-3 { animation-delay: 0.12s; }
+        .delay-4 { animation-delay: 0.16s; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
+
+        /* Safe area for mobile */
+        @supports (padding-bottom: env(safe-area-inset-bottom)) {
+            body { padding-bottom: env(safe-area-inset-bottom); }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ===== LOGIN ===== -->
+<div id="v-login" class="login-shell">
+    <h1 class="animate-in">Agents</h1>
+    <div class="animate-in delay-1">
+        <div class="field">
+            <label>Username</label>
+            <input id="l-user" value="admin" autocomplete="username">
+        </div>
+        <div class="field">
+            <label>Password</label>
+            <input id="l-pass" type="password" placeholder="Enter password" autocomplete="current-password"
+                   onkeydown="if(event.key==='Enter')doLogin()">
+        </div>
+        <button class="btn btn--accent" style="width:100%" onclick="doLogin()">Sign in</button>
+        <p id="login-error" class="login-error"></p>
+    </div>
+</div>
+
+<!-- ===== TASK LIST ===== -->
+<div id="v-list" class="shell hidden">
+    <div class="header animate-in">
+        <h1>Agents</h1>
+        <div class="header-actions">
+            <div class="conn-dot" id="ws-dot" title="Connection status"></div>
+            <button class="btn btn--ghost btn--sm" onclick="doLogout()">Sign out</button>
+            <button class="btn btn--accent btn--sm" onclick="showCreate()">New task</button>
+        </div>
+    </div>
+    <div id="task-list"></div>
+</div>
+
+<!-- ===== CREATE TASK ===== -->
+<div id="v-create" class="shell hidden">
+    <button class="back animate-in" onclick="showList()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        Back
+    </button>
+    <h2 class="detail-title animate-in delay-1" style="margin-bottom:24px;">New task</h2>
+    <div class="animate-in delay-2">
+        <div class="field">
+            <label>Title</label>
+            <input id="c-title" placeholder="What should the agent do?">
+        </div>
+        <div class="field">
+            <label>Instructions</label>
+            <textarea id="c-desc" placeholder="Describe the task in detail. The agent will follow these instructions."></textarea>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="field">
+                <label>Repository path</label>
+                <input id="c-repo" placeholder="/home/user/project">
+            </div>
+            <div class="field">
+                <label>Branch (optional)</label>
+                <input id="c-branch" placeholder="Leave blank to auto-create agent/task-<id>">
+            </div>
+        </div>
+        <div class="field">
+            <label>Agent</label>
+            <select id="c-agent">
+                <option value="claude">Claude Code</option>
+                <option value="codex">Codex</option>
+            </select>
+        </div>
+        <button class="btn btn--accent" onclick="createTask()">Create task</button>
+    </div>
+</div>
+
+<!-- ===== TASK DETAIL ===== -->
+<div id="v-detail" class="shell hidden">
+    <button class="back animate-in" onclick="showList()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        Back
+    </button>
+    <div id="detail-header" class="animate-in delay-1"></div>
+    <div class="btn-row animate-in delay-2" id="detail-actions" style="margin:16px 0;"></div>
+
+    <div id="output-section" class="hidden section animate-in delay-3">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span class="section-label" style="margin:0;">Live output</span>
+            <button class="btn btn--ghost btn--sm" onclick="refreshOutput()">Refresh</button>
+        </div>
+        <div id="terminal-output" class="terminal"></div>
+    </div>
+
+    <div id="diff-section" class="hidden section">
+        <span class="section-label">Code review</span>
+        <div id="diff-output" class="diff"></div>
+        <div class="btn-row">
+            <button class="btn btn--approve" onclick="approvePush(true)">Approve &amp; push</button>
+            <button class="btn btn--danger" onclick="approvePush(false)">Reject</button>
+        </div>
+    </div>
+
+    <div class="section animate-in delay-3">
+        <span class="section-label">Activity</span>
+        <div id="detail-updates"></div>
+    </div>
+
+    <div class="section animate-in delay-4">
+        <span class="section-label">Messages</span>
+        <div id="detail-messages" class="messages"></div>
+        <div class="msg-composer">
+            <input id="msg-input" placeholder="Send instruction to agent..."
+                   onkeydown="if(event.key==='Enter')sendMessage()">
+            <button class="btn btn--accent btn--sm" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <div style="height:40px;"></div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast"></div>
+
+<script>
+const API = '/api';
+let token = localStorage.getItem('ma_token');
+let currentTaskId = null;
+let currentTask = null;
+let ws = null;
+let outputInterval = null;
+
+// --- Helpers ---
+
+function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+}
+
+function timeAgo(dateStr) {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const s = Math.floor(diff / 1000);
+    if (s < 60) return 'now';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h';
+    return Math.floor(h / 24) + 'd';
+}
+
+function statusTag(status) {
+    const labels = {
+        pending: 'Pending', running: 'Running', paused: 'Paused',
+        needs_review: 'Review', completed: 'Done', failed: 'Failed',
+    };
+    return `<span class="status-tag st-${status}">${labels[status] || status}</span>`;
+}
+
+// --- API ---
+
+async function api(path, opts = {}) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(API + path, { headers, ...opts });
+    if (res.status === 401) {
+        token = null;
+        localStorage.removeItem('ma_token');
+        showLogin();
+        throw new Error('Session expired');
+    }
+    if (!res.ok) {
+        const text = await res.text();
+        let msg = text;
+        try { msg = JSON.parse(text).detail || text; } catch (e) {}
+        throw new Error(msg);
+    }
+    return res.json();
+}
+
+// --- Auth ---
+
+async function doLogin() {
+    const username = document.getElementById('l-user').value;
+    const password = document.getElementById('l-pass').value;
+    try {
+        const res = await fetch(API + '/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+        });
+        if (!res.ok) throw new Error('Wrong username or password');
+        const data = await res.json();
+        token = data.access_token;
+        localStorage.setItem('ma_token', token);
+        document.getElementById('login-error').textContent = '';
+        showList();
+        connectWS();
+    } catch (e) {
+        document.getElementById('login-error').textContent = e.message;
+    }
+}
+
+function doLogout() {
+    token = null;
+    localStorage.removeItem('ma_token');
+    if (ws) ws.close();
+    showLogin();
+}
+
+// --- Views ---
+
+function show(id) {
+    if (outputInterval) { clearInterval(outputInterval); outputInterval = null; }
+    ['v-login', 'v-list', 'v-create', 'v-detail'].forEach(v =>
+        document.getElementById(v).classList.toggle('hidden', v !== id)
+    );
+}
+
+function showLogin() { show('v-login'); }
+async function showList() { show('v-list'); await loadTasks(); }
+function showCreate() { show('v-create'); }
+async function showDetail(id) { currentTaskId = id; show('v-detail'); await loadDetail(); }
+
+// --- WebSocket ---
+
+function connectWS() {
+    if (ws) ws.close();
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    ws.onopen = () => { ws.send(token); setDot(true); };
+    ws.onmessage = (e) => handleWsMessage(JSON.parse(e.data));
+    ws.onclose = () => { setDot(false); setTimeout(() => { if (token) connectWS(); }, 3000); };
+}
+
+function setDot(on) {
+    document.getElementById('ws-dot').classList.toggle('live', on);
+}
+
+function handleWsMessage(data) {
+    if (data.type === 'authenticated') return;
+
+    if (data.type === 'task_update')
+        showToast(`Task #${data.task_id} — ${data.status || data.message}`);
+    else if (data.type === 'new_update')
+        showToast(data.content.slice(0, 80));
+    else if (data.type === 'task_created')
+        showToast(`Created: ${data.title}`);
+
+    // Refresh visible view
+    if (!document.getElementById('v-list').classList.contains('hidden')) loadTasks();
+    if (!document.getElementById('v-detail').classList.contains('hidden') && data.task_id === currentTaskId) loadDetail();
+}
+
+function showToast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+// --- Task List ---
+
+async function loadTasks() {
+    const tasks = await api('/tasks');
+    const el = document.getElementById('task-list');
+    if (tasks.length === 0) {
+        el.innerHTML = `
+            <div class="empty animate-in">
+                <h2>No agents running</h2>
+                <p>Create a task to dispatch an AI coding agent. It will work in your repository, commit changes, and report back.</p>
+            </div>`;
+        return;
+    }
+    el.innerHTML = tasks.map((t, i) => `
+        <div class="task-item animate-in delay-${Math.min(i, 4)}" onclick="showDetail(${t.id})">
+            <div class="task-row">
+                <span class="task-title">${esc(t.title)}</span>
+                ${statusTag(t.status)}
+            </div>
+            <div class="task-meta">
+                ${esc(t.agent_type)}${t.branch ? ' · ' + esc(t.branch) : ''} · ${timeAgo(t.created_at)}
+            </div>
+        </div>
+    `).join('');
+}
+
+// --- Create ---
+
+async function createTask() {
+    const body = {
+        title: document.getElementById('c-title').value,
+        description: document.getElementById('c-desc').value,
+        repo_url: document.getElementById('c-repo').value,
+        branch: document.getElementById('c-branch').value || null,
+        agent_type: document.getElementById('c-agent').value,
+    };
+    if (!body.title || !body.repo_url) { showToast('Title and repo path are required'); return; }
+    try {
+        await api('/tasks', { method: 'POST', body: JSON.stringify(body) });
+        ['c-title', 'c-desc', 'c-repo', 'c-branch'].forEach(id => document.getElementById(id).value = '');
+        showList();
+    } catch (e) {
+        showToast(e.message);
+    }
+}
+
+// --- Detail ---
+
+async function loadDetail() {
+    const [task, updates, messages] = await Promise.all([
+        api(`/tasks/${currentTaskId}`),
+        api(`/tasks/${currentTaskId}/updates`),
+        api(`/tasks/${currentTaskId}/messages`),
+    ]);
+    currentTask = task;
+
+    document.getElementById('detail-header').innerHTML = `
+        <div class="task-row" style="margin-bottom:2px;">
+            <span class="detail-title">${esc(task.title)}</span>
+            ${statusTag(task.status)}
+        </div>
+        ${task.description ? `<p class="detail-desc">${esc(task.description)}</p>` : ''}
+        <div class="detail-meta">
+            ${esc(task.agent_type)} · ${esc(task.repo_url)} · ${esc(task.branch || 'branch pending')}
+        </div>
+    `;
+
+    // Actions
+    const btns = [];
+    if (['pending', 'paused', 'needs_review'].includes(task.status))
+        btns.push(`<button class="btn btn--accent" onclick="startTask()">Start agent</button>`);
+    if (task.status === 'running')
+        btns.push(`<button class="btn btn--danger" onclick="stopTask()">Stop agent</button>`);
+    if (task.status === 'needs_review') {
+        if (task.branch) btns.push(`<button class="btn btn--approve" onclick="showDiffPanel()">Review diff</button>`);
+        btns.push(`<button class="btn" onclick="approveComplete()">Mark done</button>`);
+    }
+    document.getElementById('detail-actions').innerHTML = btns.join('');
+
+    // Live output
+    const outSec = document.getElementById('output-section');
+    if (task.tmux_session && task.status === 'running') {
+        outSec.classList.remove('hidden');
+        refreshOutput();
+        if (outputInterval) clearInterval(outputInterval);
+        outputInterval = setInterval(refreshOutput, 5000);
+    } else {
+        outSec.classList.add('hidden');
+        if (outputInterval) { clearInterval(outputInterval); outputInterval = null; }
+    }
+
+    if (task.status !== 'needs_review')
+        document.getElementById('diff-section').classList.add('hidden');
+
+    // Updates
+    const uEl = document.getElementById('detail-updates');
+    if (updates.length === 0) {
+        uEl.innerHTML = `<p style="color:var(--text-faint);font-size:13px;padding:8px 0;">No activity yet. Start the agent to begin.</p>`;
+    } else {
+        uEl.innerHTML = updates.map(u => `
+            <div class="update">
+                <span class="update-tag ut-${u.type}">${u.type}</span>
+                <span class="update-body">
+                    ${esc(u.content)}${u.commit_sha ? `<span class="update-sha">${u.commit_sha.slice(0, 7)}</span>` : ''}
+                </span>
+                <span class="update-time">${timeAgo(u.created_at)}</span>
+            </div>
+        `).join('');
+    }
+
+    // Messages
+    const mEl = document.getElementById('detail-messages');
+    if (messages.length === 0) {
+        mEl.innerHTML = `<p style="color:var(--text-faint);font-size:13px;">Send an instruction to guide the agent.</p>`;
+    } else {
+        mEl.innerHTML = messages.map(m => `
+            <div class="msg ${m.direction === 'user_to_agent' ? 'msg--out' : 'msg--in'}">
+                ${esc(m.content)}
+                <div class="msg-time">${timeAgo(m.created_at)}</div>
+            </div>
+        `).join('');
+    }
+}
+
+// --- Actions ---
+
+async function startTask() {
+    try {
+        await api(`/tasks/${currentTaskId}/start`, { method: 'POST' });
+        await loadDetail();
+    } catch (e) { showToast(e.message); }
+}
+
+async function stopTask() {
+    try {
+        await api(`/tasks/${currentTaskId}/stop`, { method: 'POST' });
+        await loadDetail();
+    } catch (e) { showToast(e.message); }
+}
+
+async function approveComplete() {
+    try {
+        await api(`/tasks/${currentTaskId}`, { method: 'PATCH', body: JSON.stringify({ status: 'completed' }) });
+        await loadDetail();
+    } catch (e) { showToast(e.message); }
+}
+
+async function refreshOutput() {
+    const el = document.getElementById('terminal-output');
+    try {
+        const data = await api(`/tasks/${currentTaskId}/output?lines=80`);
+        el.textContent = data.output || 'No terminal output yet.';
+        el.scrollTop = el.scrollHeight;
+    } catch (e) {
+        el.textContent = e.message || 'Failed to load live output.';
+        showToast(e.message || 'Failed to load live output');
+        await loadDetail();
+    }
+}
+
+// --- Diff ---
+
+async function showDiffPanel() {
+    const sec = document.getElementById('diff-section');
+    sec.classList.remove('hidden');
+    const el = document.getElementById('diff-output');
+    el.innerHTML = '<span style="color:var(--text-faint)">Loading diff...</span>';
+    try {
+        const data = await api(`/tasks/${currentTaskId}/diff`);
+        if (!data.diff.trim()) {
+            el.innerHTML = '<span style="color:var(--text-faint)">No changes.</span>';
+        } else {
+            el.innerHTML = data.diff.split('\n').map(line => {
+                const e = esc(line);
+                if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="d-add">${e}</span>`;
+                if (line.startsWith('-') && !line.startsWith('---')) return `<span class="d-del">${e}</span>`;
+                if (line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ')) return `<span class="d-hdr">${e}</span>`;
+                return e;
+            }).join('\n');
+        }
+    } catch (e) {
+        el.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+    }
+}
+
+async function approvePush(approve) {
+    try {
+        await api(`/tasks/${currentTaskId}/push`, { method: 'POST', body: JSON.stringify({ approve }) });
+        showToast(approve ? 'Pushed' : 'Rejected');
+        document.getElementById('diff-section').classList.add('hidden');
+        await loadDetail();
+    } catch (e) { showToast(e.message); }
+}
+
+// --- Messages ---
+
+async function sendMessage() {
+    const input = document.getElementById('msg-input');
+    if (!input.value.trim()) return;
+    try {
+        await api(`/tasks/${currentTaskId}/messages`, { method: 'POST', body: JSON.stringify({ content: input.value }) });
+        input.value = '';
+        await loadDetail();
+    } catch (e) { showToast(e.message); }
+}
+
+// --- Init ---
+
+(async function init() {
+    try {
+        const res = await fetch(API + '/auth/status');
+        const data = await res.json();
+        if (data.auth_disabled) {
+            token = '_disabled';
+            showList();
+            connectWS();
+            return;
+        }
+    } catch (e) {}
+
+    if (token) { showList(); connectWS(); }
+    else showLogin();
+})();
+</script>
+</body>
+</html>

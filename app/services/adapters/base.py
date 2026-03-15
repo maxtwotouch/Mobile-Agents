@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Optional
+
+from app.models import Message, MessageDirection, Task, TaskStatus, Update, UpdateType
+from app.services.agent import AgentService
+
+
+class BaseAgentAdapter(ABC):
+    @abstractmethod
+    async def start(self, task: Task) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def send_message(self, task: Task, content: str) -> Optional[str]:
+        raise NotImplementedError
+
+    async def stop(self, task: Task) -> None:
+        if task.tmux_session:
+            await AgentService.kill(task.tmux_session)
+            task.tmux_session = None
+        task.status = TaskStatus.paused
+
+    async def is_alive(self, task: Task) -> bool:
+        return bool(task.tmux_session) and await AgentService.is_alive(task.tmux_session)
+
+    async def capture_output(self, task: Task, lines: int = 50) -> str:
+        if not task.tmux_session:
+            return ""
+        return await AgentService.capture_output(task.tmux_session, lines)
+
+    def finalize_records(self, task: Task, output: str) -> list[Update | Message]:
+        records: list[Update | Message] = [
+            Update(
+                task_id=task.id,
+                type=UpdateType.summary,
+                content=f"Agent session ended.\n\nLast output:\n{output}"
+                if output.strip()
+                else "Agent session ended.",
+            )
+        ]
+        task.status = TaskStatus.needs_review
+        task.tmux_session = None
+        return records
+
+    def apply_post_run_state(self, task: Task) -> None:
+        pass
+
+    def _append_agent_reply(
+        self, records: list[Update | Message], task: Task, content: str
+    ) -> None:
+        if not content:
+            return
+        records.append(
+            Message(
+                task_id=task.id,
+                direction=MessageDirection.agent_to_user,
+                content=content,
+            )
+        )
