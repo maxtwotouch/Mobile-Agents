@@ -36,9 +36,7 @@ def _agent_command(task) -> str:
     binary = _agent_binary(task)
     if binary == "codex":
         return f"{binary} --dangerously-bypass-approvals-and-sandbox --no-alt-screen"
-    return (
-        f"{binary} --dangerously-skip-permissions"
-    )
+    return f"{binary} --dangerously-skip-permissions"
 
 
 def _ensure_repo_path(repo_path: str) -> None:
@@ -67,10 +65,7 @@ def _tail_lines(path: Path, lines: int) -> str:
 
 async def _run_git(repo_path: str, *args: str) -> tuple[int, str, str]:
     proc = await asyncio.create_subprocess_exec(
-        "git",
-        "-C",
-        repo_path,
-        *args,
+        "git", "-C", repo_path, *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -94,8 +89,13 @@ class AgentService:
         return f"agent/task-{task.id}"
 
     @staticmethod
-    async def prepare_repo(task) -> str:
-        """Validate repo and switch to the task branch before launch."""
+    async def prepare_repo(task) -> tuple[str, str, str]:
+        """Validate repo, create worktree, return (branch, worktree_path, base_branch).
+
+        Uses git worktrees so each task gets an isolated working copy.
+        """
+        from app.services.repo import create_worktree, _detect_default_branch
+
         repo_path = task.repo_url
         _ensure_repo_path(repo_path)
 
@@ -106,26 +106,18 @@ class AgentService:
             )
 
         branch = task.branch or AgentService.default_branch_name(task)
+        base_branch = task.base_branch or await _detect_default_branch(repo_path)
 
-        code, _, _ = await _run_git(
-            repo_path, "rev-parse", "--verify", f"refs/heads/{branch}"
-        )
-        if code == 0:
-            code, _, stderr = await _run_git(repo_path, "switch", branch)
-            if code != 0:
-                raise RuntimeError(f"Failed to switch to branch '{branch}': {stderr}")
-        else:
-            code, _, stderr = await _run_git(repo_path, "switch", "-c", branch)
-            if code != 0:
-                raise RuntimeError(f"Failed to create branch '{branch}': {stderr}")
+        worktree_path = await create_worktree(repo_path, branch, task.id)
 
-        return branch
+        return branch, worktree_path, base_branch
 
     @staticmethod
-    async def spawn(task, prompt: Optional[str] = None) -> str:
-        """Spawn an agent run. Codex uses resumable one-shot runs; Claude stays interactive."""
+    async def spawn(task, prompt: Optional[str] = None, work_dir: Optional[str] = None) -> str:
+        """Spawn an agent run. Uses worktree_path as working directory if provided."""
         session_name = f"agent-{task.id}"
-        _ensure_repo_path(task.repo_url)
+        cwd = work_dir or task.worktree_path or task.repo_url
+        _ensure_repo_path(cwd)
 
         agent_binary = _agent_binary(task)
         if shutil.which(agent_binary) is None:
@@ -169,16 +161,10 @@ class AgentService:
             pass
 
         proc = await asyncio.create_subprocess_exec(
-            "tmux",
-            "new-session",
-            "-d",
-            "-s",
-            session_name,
-            "-c",
-            task.repo_url,
-            _shell(),
-            "-lc",
-            shell_cmd,
+            "tmux", "new-session", "-d",
+            "-s", session_name,
+            "-c", cwd,
+            _shell(), "-lc", shell_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -201,7 +187,6 @@ class AgentService:
 
     @staticmethod
     async def kill(session_name: str) -> None:
-        """Kill an agent session."""
         if _has_tmux():
             proc = await asyncio.create_subprocess_shell(
                 f"tmux kill-session -t {session_name}",
@@ -221,7 +206,6 @@ class AgentService:
 
     @staticmethod
     async def is_alive(session_name: str) -> bool:
-        """Check if an agent is still running."""
         if _has_tmux():
             proc = await asyncio.create_subprocess_shell(
                 f"tmux has-session -t {session_name}",
@@ -236,16 +220,10 @@ class AgentService:
 
     @staticmethod
     async def capture_output(session_name: str, lines: int = 50) -> str:
-        """Capture recent output from an agent."""
         if _has_tmux():
             proc = await asyncio.create_subprocess_exec(
-                "tmux",
-                "capture-pane",
-                "-t",
-                session_name,
-                "-p",
-                "-S",
-                f"-{lines}",
+                "tmux", "capture-pane", "-t", session_name,
+                "-p", "-S", f"-{lines}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -289,7 +267,6 @@ class AgentService:
 
     @staticmethod
     async def send_message(session_name: str, content: str) -> None:
-        """Send a follow-up instruction to an interactive tmux session."""
         if not content.strip():
             return
         if not _has_tmux():
@@ -298,12 +275,8 @@ class AgentService:
             raise RuntimeError("Agent session is not running")
 
         proc = await asyncio.create_subprocess_exec(
-            "tmux",
-            "send-keys",
-            "-t",
-            session_name,
-            content,
-            "Enter",
+            "tmux", "send-keys", "-t", session_name,
+            content, "Enter",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -315,7 +288,6 @@ class AgentService:
 async def _read_output(
     session_name: str, proc: asyncio.subprocess.Process, log_path: Path
 ):
-    """Background task: read process stdout into the output buffer."""
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as log_file:
@@ -329,7 +301,6 @@ async def _read_output(
                 buf = _output_buffers.get(session_name)
                 if buf is not None:
                     buf.append(decoded)
-                    # Trim buffer
                     if len(buf) > OUTPUT_BUFFER_LINES:
                         del buf[: len(buf) - OUTPUT_BUFFER_LINES]
     except Exception:

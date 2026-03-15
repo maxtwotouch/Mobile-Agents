@@ -16,6 +16,14 @@ async def run_startup_migrations() -> None:
             await conn.execute(
                 text("ALTER TABLE tasks ADD COLUMN codex_session_id VARCHAR(100)")
             )
+        if "worktree_path" not in columns:
+            await conn.execute(
+                text("ALTER TABLE tasks ADD COLUMN worktree_path VARCHAR(500)")
+            )
+        if "base_branch" not in columns:
+            await conn.execute(
+                text("ALTER TABLE tasks ADD COLUMN base_branch VARCHAR(200)")
+            )
 
 
 async def get_db():

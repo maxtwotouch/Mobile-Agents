@@ -210,7 +210,6 @@
         .st-completed { color: var(--blue); }
         .st-failed { color: var(--red); }
 
-        /* Running indicator */
         .st-running::before {
             content: '';
             display: inline-block;
@@ -323,6 +322,82 @@
         .d-add { color: var(--green); }
         .d-del { color: var(--red); }
         .d-hdr { color: var(--blue); }
+
+        /* --- File list for review --- */
+
+        .file-list { margin-bottom: 16px; }
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .file-item:first-child { border-top: 1px solid var(--border); }
+        .file-item:hover { background: var(--bg-raised); }
+
+        .file-name {
+            font-family: 'SF Mono', monospace;
+            font-size: 12px;
+            color: var(--text);
+            word-break: break-all;
+            flex: 1;
+            min-width: 0;
+        }
+        .file-stats {
+            display: flex;
+            gap: 8px;
+            font-family: 'SF Mono', monospace;
+            font-size: 11px;
+            flex-shrink: 0;
+            margin-left: 12px;
+        }
+        .file-stats .add { color: var(--green); }
+        .file-stats .del { color: var(--red); }
+
+        /* --- Commit log --- */
+
+        .commit-item {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .commit-item:first-child { border-top: 1px solid var(--border); }
+        .commit-sha {
+            font-family: 'SF Mono', monospace;
+            font-size: 11px;
+            color: var(--accent);
+            margin-right: 8px;
+        }
+        .commit-msg {
+            font-size: 13px;
+            color: var(--text);
+        }
+        .commit-meta {
+            font-size: 11px;
+            color: var(--text-faint);
+            margin-top: 2px;
+        }
+
+        /* --- Diff summary bar --- */
+
+        .diff-summary {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            padding: 10px 14px;
+            background: var(--bg-raised);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            margin-bottom: 12px;
+            font-size: 13px;
+        }
+        .diff-summary .num { font-weight: 600; }
+        .diff-summary .add { color: var(--green); }
+        .diff-summary .del { color: var(--red); }
+        .diff-summary .files { color: var(--text-dim); }
 
         /* --- Updates --- */
 
@@ -483,12 +558,65 @@
             transform: translateX(-50%) translateY(0);
         }
 
+        /* --- Repo picker --- */
+
+        .repo-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .repo-item:first-child { border-top: 1px solid var(--border); }
+        .repo-item:hover { opacity: 0.7; }
+        .repo-item.selected { border-color: var(--accent); }
+
+        .repo-name {
+            font-family: var(--serif);
+            font-size: 1.1rem;
+            color: var(--text);
+        }
+        .repo-meta {
+            font-size: 11px;
+            color: var(--text-faint);
+            margin-top: 2px;
+        }
+
+        .repo-check {
+            width: 18px; height: 18px;
+            border: 1px solid var(--border-light);
+            border-radius: 3px;
+            flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s;
+        }
+        .repo-item.selected .repo-check {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+        .repo-item.selected .repo-check::after {
+            content: '';
+            width: 8px; height: 5px;
+            border-left: 2px solid var(--bg);
+            border-bottom: 2px solid var(--bg);
+            transform: rotate(-45deg) translateY(-1px);
+        }
+
+        /* --- Clone form --- */
+
+        .clone-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .clone-row input { flex: 1; }
+
         /* --- Utilities --- */
 
         .hidden { display: none !important; }
         .sep { height: 1px; background: var(--border); margin: 20px 0; }
-
-        /* --- Entrance animation --- */
 
         @keyframes fadeUp {
             from { opacity: 0; transform: translateY(8px); }
@@ -502,14 +630,41 @@
         .delay-3 { animation-delay: 0.12s; }
         .delay-4 { animation-delay: 0.16s; }
 
-        /* Scrollbar */
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
 
-        /* Safe area for mobile */
         @supports (padding-bottom: env(safe-area-inset-bottom)) {
             body { padding-bottom: env(safe-area-inset-bottom); }
+        }
+
+        /* --- Tabs --- */
+
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 12px;
+        }
+        .tab {
+            padding: 8px 16px;
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-faint);
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-family: var(--sans);
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .tab:hover { color: var(--text-dim); }
+        .tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
         }
     </style>
 </head>
@@ -554,6 +709,18 @@
     </button>
     <h2 class="detail-title animate-in delay-1" style="margin-bottom:24px;">New task</h2>
     <div class="animate-in delay-2">
+        <!-- Repo selection -->
+        <div class="field">
+            <label>Repository</label>
+            <div id="repo-picker"></div>
+            <div class="clone-row" style="margin-top:12px;">
+                <input id="clone-url" placeholder="Or paste a git URL to clone..." style="padding:8px 12px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);font-size:13px;font-family:var(--sans);">
+                <button class="btn btn--sm" onclick="cloneRepo()">Clone</button>
+            </div>
+            <!-- Fallback: manual path -->
+            <input id="c-repo" type="hidden">
+        </div>
+
         <div class="field">
             <label>Title</label>
             <input id="c-title" placeholder="What should the agent do?">
@@ -564,20 +731,16 @@
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
             <div class="field">
-                <label>Repository path</label>
-                <input id="c-repo" placeholder="/home/user/project">
+                <label>Branch (optional)</label>
+                <input id="c-branch" placeholder="Auto: agent/task-N">
             </div>
             <div class="field">
-                <label>Branch (optional)</label>
-                <input id="c-branch" placeholder="Leave blank to auto-create agent/task-<id>">
+                <label>Agent</label>
+                <select id="c-agent" style="padding:10px 14px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);font-size:14px;font-family:var(--sans);">
+                    <option value="claude">Claude Code</option>
+                    <option value="codex">Codex</option>
+                </select>
             </div>
-        </div>
-        <div class="field">
-            <label>Agent</label>
-            <select id="c-agent">
-                <option value="claude">Claude Code</option>
-                <option value="codex">Codex</option>
-            </select>
         </div>
         <button class="btn btn--accent" onclick="createTask()">Create task</button>
     </div>
@@ -600,11 +763,30 @@
         <div id="terminal-output" class="terminal"></div>
     </div>
 
-    <div id="diff-section" class="hidden section">
+    <!-- Review section: tabs for files / full diff / commits -->
+    <div id="review-section" class="hidden section">
         <span class="section-label">Code review</span>
-        <div id="diff-output" class="diff"></div>
-        <div class="btn-row">
-            <button class="btn btn--approve" onclick="approvePush(true)">Approve &amp; push</button>
+        <div id="diff-summary-bar"></div>
+        <div class="tabs" id="review-tabs">
+            <button class="tab active" data-tab="files" onclick="switchReviewTab('files')">Files</button>
+            <button class="tab" data-tab="diff" onclick="switchReviewTab('diff')">Full diff</button>
+            <button class="tab" data-tab="commits" onclick="switchReviewTab('commits')">Commits</button>
+        </div>
+        <div id="review-files"></div>
+        <div id="review-diff" class="hidden"></div>
+        <div id="review-commits" class="hidden"></div>
+
+        <!-- Single file diff viewer (shown when clicking a file) -->
+        <div id="file-diff-viewer" class="hidden">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <span id="file-diff-name" class="file-name" style="font-size:13px;"></span>
+                <button class="btn btn--ghost btn--sm" onclick="closeFileDiff()">Close</button>
+            </div>
+            <div id="file-diff-content" class="diff"></div>
+        </div>
+
+        <div class="btn-row" style="margin-top:12px;">
+            <button class="btn btn--approve" onclick="approvePush(true)">Approve & push</button>
             <button class="btn btn--danger" onclick="approvePush(false)">Reject</button>
         </div>
     </div>
@@ -637,6 +819,8 @@ let currentTaskId = null;
 let currentTask = null;
 let ws = null;
 let outputInterval = null;
+let selectedRepo = null;
+let repoList = [];
 
 // --- Helpers ---
 
@@ -663,6 +847,11 @@ function statusTag(status) {
         needs_review: 'Review', completed: 'Done', failed: 'Failed',
     };
     return `<span class="status-tag st-${status}">${labels[status] || status}</span>`;
+}
+
+function repoShortName(path) {
+    if (!path) return '';
+    return path.split('/').pop();
 }
 
 // --- API ---
@@ -727,7 +916,7 @@ function show(id) {
 
 function showLogin() { show('v-login'); }
 async function showList() { show('v-list'); await loadTasks(); }
-function showCreate() { show('v-create'); }
+async function showCreate() { show('v-create'); await loadRepos(); }
 async function showDetail(id) { currentTaskId = id; show('v-detail'); await loadDetail(); }
 
 // --- WebSocket ---
@@ -755,7 +944,6 @@ function handleWsMessage(data) {
     else if (data.type === 'task_created')
         showToast(`Created: ${data.title}`);
 
-    // Refresh visible view
     if (!document.getElementById('v-list').classList.contains('hidden')) loadTasks();
     if (!document.getElementById('v-detail').classList.contains('hidden') && data.task_id === currentTaskId) loadDetail();
 }
@@ -766,6 +954,57 @@ function showToast(msg) {
     el.classList.add('show');
     clearTimeout(el._t);
     el._t = setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+// --- Repos ---
+
+async function loadRepos() {
+    try {
+        repoList = await api('/repos');
+    } catch (e) {
+        repoList = [];
+    }
+    renderRepoPicker();
+}
+
+function renderRepoPicker() {
+    const el = document.getElementById('repo-picker');
+    if (repoList.length === 0) {
+        el.innerHTML = `<p style="color:var(--text-faint);font-size:13px;padding:8px 0;">No repos yet. Clone one below or enter a path manually.</p>`;
+        return;
+    }
+    el.innerHTML = repoList.map(r => `
+        <div class="repo-item ${selectedRepo === r.path ? 'selected' : ''}" onclick="selectRepo('${esc(r.path)}')">
+            <div>
+                <div class="repo-name">${esc(r.name)}</div>
+                <div class="repo-meta">${esc(r.remote_url || r.path)} · ${esc(r.default_branch || '')}${r.last_commit ? ' · ' + esc(r.last_commit) : ''}</div>
+            </div>
+            <div class="repo-check"></div>
+        </div>
+    `).join('');
+}
+
+function selectRepo(path) {
+    selectedRepo = selectedRepo === path ? null : path;
+    document.getElementById('c-repo').value = selectedRepo || '';
+    renderRepoPicker();
+}
+
+async function cloneRepo() {
+    const url = document.getElementById('clone-url').value.trim();
+    if (!url) return;
+    try {
+        showToast('Cloning...');
+        const repo = await api('/repos', { method: 'POST', body: JSON.stringify({ url }) });
+        document.getElementById('clone-url').value = '';
+        repoList.push(repo);
+        selectedRepo = repo.path;
+        document.getElementById('c-repo').value = repo.path;
+        renderRepoPicker();
+        showToast(`Cloned ${repo.name}`);
+    } catch (e) {
+        showToast(e.message);
+    }
 }
 
 // --- Task List ---
@@ -788,7 +1027,7 @@ async function loadTasks() {
                 ${statusTag(t.status)}
             </div>
             <div class="task-meta">
-                ${esc(t.agent_type)}${t.branch ? ' · ' + esc(t.branch) : ''} · ${timeAgo(t.created_at)}
+                ${esc(t.agent_type)} · ${esc(repoShortName(t.repo_url))}${t.branch ? ' · ' + esc(t.branch) : ''} · ${timeAgo(t.created_at)}
             </div>
         </div>
     `).join('');
@@ -800,14 +1039,15 @@ async function createTask() {
     const body = {
         title: document.getElementById('c-title').value,
         description: document.getElementById('c-desc').value,
-        repo_url: document.getElementById('c-repo').value,
+        repo_url: document.getElementById('c-repo').value || selectedRepo,
         branch: document.getElementById('c-branch').value || null,
         agent_type: document.getElementById('c-agent').value,
     };
-    if (!body.title || !body.repo_url) { showToast('Title and repo path are required'); return; }
+    if (!body.title || !body.repo_url) { showToast('Title and repository are required'); return; }
     try {
         await api('/tasks', { method: 'POST', body: JSON.stringify(body) });
-        ['c-title', 'c-desc', 'c-repo', 'c-branch'].forEach(id => document.getElementById(id).value = '');
+        ['c-title', 'c-desc', 'c-branch'].forEach(id => document.getElementById(id).value = '');
+        selectedRepo = null;
         showList();
     } catch (e) {
         showToast(e.message);
@@ -831,7 +1071,7 @@ async function loadDetail() {
         </div>
         ${task.description ? `<p class="detail-desc">${esc(task.description)}</p>` : ''}
         <div class="detail-meta">
-            ${esc(task.agent_type)} · ${esc(task.repo_url)} · ${esc(task.branch || 'branch pending')}
+            ${esc(task.agent_type)} · ${esc(repoShortName(task.repo_url))} · ${esc(task.branch || 'branch pending')}${task.base_branch ? ' (from ' + esc(task.base_branch) + ')' : ''}
         </div>
     `;
 
@@ -842,7 +1082,7 @@ async function loadDetail() {
     if (task.status === 'running')
         btns.push(`<button class="btn btn--danger" onclick="stopTask()">Stop agent</button>`);
     if (task.status === 'needs_review') {
-        if (task.branch) btns.push(`<button class="btn btn--approve" onclick="showDiffPanel()">Review diff</button>`);
+        if (task.branch) btns.push(`<button class="btn btn--approve" onclick="showReview()">Review changes</button>`);
         btns.push(`<button class="btn" onclick="approveComplete()">Mark done</button>`);
     }
     document.getElementById('detail-actions').innerHTML = btns.join('');
@@ -860,7 +1100,7 @@ async function loadDetail() {
     }
 
     if (task.status !== 'needs_review')
-        document.getElementById('diff-section').classList.add('hidden');
+        document.getElementById('review-section').classList.add('hidden');
 
     // Updates
     const uEl = document.getElementById('detail-updates');
@@ -928,36 +1168,130 @@ async function refreshOutput() {
     }
 }
 
-// --- Diff ---
+// --- Review (diff, files, commits) ---
 
-async function showDiffPanel() {
-    const sec = document.getElementById('diff-section');
+let reviewData = null;
+
+async function showReview() {
+    const sec = document.getElementById('review-section');
     sec.classList.remove('hidden');
-    const el = document.getElementById('diff-output');
-    el.innerHTML = '<span style="color:var(--text-faint)">Loading diff...</span>';
+    document.getElementById('review-files').innerHTML = '<p style="color:var(--text-faint);font-size:13px;">Loading...</p>';
+
     try {
-        const data = await api(`/tasks/${currentTaskId}/diff`);
-        if (!data.diff.trim()) {
-            el.innerHTML = '<span style="color:var(--text-faint)">No changes.</span>';
-        } else {
-            el.innerHTML = data.diff.split('\n').map(line => {
-                const e = esc(line);
-                if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="d-add">${e}</span>`;
-                if (line.startsWith('-') && !line.startsWith('---')) return `<span class="d-del">${e}</span>`;
-                if (line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ')) return `<span class="d-hdr">${e}</span>`;
-                return e;
-            }).join('\n');
-        }
+        const [diffData, commits] = await Promise.all([
+            api(`/tasks/${currentTaskId}/diff`),
+            api(`/tasks/${currentTaskId}/commits`),
+        ]);
+        reviewData = { ...diffData, commits };
+
+        // Summary bar
+        const s = diffData.stats;
+        document.getElementById('diff-summary-bar').innerHTML = `
+            <div class="diff-summary">
+                <span class="files">${s.files_changed} file${s.files_changed !== 1 ? 's' : ''} changed</span>
+                <span class="add"><span class="num">+${s.total_additions}</span></span>
+                <span class="del"><span class="num">-${s.total_deletions}</span></span>
+            </div>
+        `;
+
+        // File list
+        renderFileList(s.files);
+
+        // Full diff
+        renderFullDiff(diffData.diff);
+
+        // Commits
+        renderCommits(commits);
+
+        switchReviewTab('files');
     } catch (e) {
-        el.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+        document.getElementById('review-files').innerHTML = `<p style="color:var(--red);font-size:13px;">${esc(e.message)}</p>`;
     }
+}
+
+function renderFileList(files) {
+    const el = document.getElementById('review-files');
+    if (!files || files.length === 0) {
+        el.innerHTML = '<p style="color:var(--text-faint);font-size:13px;">No files changed.</p>';
+        return;
+    }
+    el.innerHTML = `<div class="file-list">${files.map(f => `
+        <div class="file-item" onclick="showFileDiff('${esc(f.path)}')">
+            <span class="file-name">${esc(f.path)}</span>
+            <span class="file-stats">
+                <span class="add">+${f.additions}</span>
+                <span class="del">-${f.deletions}</span>
+            </span>
+        </div>
+    `).join('')}</div>`;
+}
+
+function renderFullDiff(diff) {
+    const el = document.getElementById('review-diff');
+    if (!diff || !diff.trim()) {
+        el.innerHTML = '<p style="color:var(--text-faint);font-size:13px;">No changes.</p>';
+        return;
+    }
+    el.innerHTML = `<div class="diff">${colorDiff(diff)}</div>`;
+}
+
+function renderCommits(commits) {
+    const el = document.getElementById('review-commits');
+    if (!commits || commits.length === 0) {
+        el.innerHTML = '<p style="color:var(--text-faint);font-size:13px;">No commits yet.</p>';
+        return;
+    }
+    el.innerHTML = commits.map(c => `
+        <div class="commit-item">
+            <span class="commit-sha">${esc(c.short_sha)}</span>
+            <span class="commit-msg">${esc(c.message)}</span>
+            <div class="commit-meta">${esc(c.author)} · ${esc(c.date)}</div>
+        </div>
+    `).join('');
+}
+
+function colorDiff(diff) {
+    return diff.split('\n').map(line => {
+        const e = esc(line);
+        if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="d-add">${e}</span>`;
+        if (line.startsWith('-') && !line.startsWith('---')) return `<span class="d-del">${e}</span>`;
+        if (line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ')) return `<span class="d-hdr">${e}</span>`;
+        return e;
+    }).join('\n');
+}
+
+function switchReviewTab(tab) {
+    document.querySelectorAll('#review-tabs .tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.tab === tab)
+    );
+    document.getElementById('review-files').classList.toggle('hidden', tab !== 'files');
+    document.getElementById('review-diff').classList.toggle('hidden', tab !== 'diff');
+    document.getElementById('review-commits').classList.toggle('hidden', tab !== 'commits');
+    document.getElementById('file-diff-viewer').classList.add('hidden');
+}
+
+async function showFileDiff(path) {
+    const viewer = document.getElementById('file-diff-viewer');
+    viewer.classList.remove('hidden');
+    document.getElementById('file-diff-name').textContent = path;
+    document.getElementById('file-diff-content').innerHTML = '<span style="color:var(--text-faint)">Loading...</span>';
+    try {
+        const data = await api(`/tasks/${currentTaskId}/diff/${encodeURIComponent(path)}`);
+        document.getElementById('file-diff-content').innerHTML = colorDiff(data.diff || 'No changes.');
+    } catch (e) {
+        document.getElementById('file-diff-content').innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+    }
+}
+
+function closeFileDiff() {
+    document.getElementById('file-diff-viewer').classList.add('hidden');
 }
 
 async function approvePush(approve) {
     try {
         await api(`/tasks/${currentTaskId}/push`, { method: 'POST', body: JSON.stringify({ approve }) });
         showToast(approve ? 'Pushed' : 'Rejected');
-        document.getElementById('diff-section').classList.add('hidden');
+        document.getElementById('review-section').classList.add('hidden');
         await loadDetail();
     } catch (e) { showToast(e.message); }
 }

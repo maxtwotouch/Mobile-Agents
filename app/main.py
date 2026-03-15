@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.auth import verify_token
 from app.database import engine, run_startup_migrations
 from app.models import Base
-from app.routers import auth, tasks, updates
+from app.routers import auth, repos, tasks, updates
 from app.services.monitor import monitor_loop
 from app.ws import connect, disconnect
 
@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Mobile Agents", version="0.1.0", lifespan=lifespan)
 
 app.include_router(auth.router, prefix="/api")
+app.include_router(repos.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(updates.router, prefix="/api")
 

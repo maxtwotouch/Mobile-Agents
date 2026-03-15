@@ -7,8 +7,11 @@ from app.services.adapters.base import BaseAgentAdapter
 
 class ClaudeAdapter(BaseAgentAdapter):
     async def start(self, task: Task) -> str:
-        task.branch = await AgentService.prepare_repo(task)
-        return await AgentService.spawn(task, task.description)
+        branch, worktree_path, base_branch = await AgentService.prepare_repo(task)
+        task.branch = branch
+        task.worktree_path = worktree_path
+        task.base_branch = base_branch
+        return await AgentService.spawn(task, task.description, work_dir=worktree_path)
 
     async def send_message(self, task: Task, content: str) -> Optional[str]:
         if not task.tmux_session:

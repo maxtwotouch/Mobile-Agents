@@ -47,6 +47,8 @@ class Task(Base):
     codex_session_id: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
     )
+    worktree_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    base_branch: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

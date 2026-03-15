@@ -19,6 +19,13 @@ from app.schemas import (
 )
 from app.services.agent import AgentService
 from app.services.adapters import adapter_for
+from app.services.repo import (
+    get_commits,
+    get_diff_stats,
+    get_file_diff,
+    _detect_default_branch,
+    _git,
+)
 from app.ws import broadcast
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -35,6 +42,7 @@ async def create_task(
         description=body.description,
         repo_url=body.repo_url,
         branch=body.branch,
+        base_branch=body.base_branch,
         agent_type=body.agent_type,
     )
     db.add(task)
@@ -83,6 +91,8 @@ async def patch_task(
         task.status = body.status
     if body.branch is not None:
         task.branch = body.branch
+    if body.base_branch is not None:
+        task.base_branch = body.base_branch
     await db.commit()
     await db.refresh(task)
     await broadcast(
@@ -129,7 +139,6 @@ async def stop_task(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(require_auth),
 ):
-    """Kill the tmux session for this task."""
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -152,7 +161,6 @@ async def get_output(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(require_auth),
 ):
-    """Capture live terminal output from the agent's tmux session."""
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -186,7 +194,6 @@ async def approve_push(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(require_auth),
 ):
-    """Approve or reject pushing the agent's branch."""
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -196,7 +203,6 @@ async def approve_push(
         raise HTTPException(400, "No branch set for this task")
 
     if body.approve:
-        # Push the branch
         cmd = f"git -C {shlex.quote(task.repo_url)} push origin {shlex.quote(task.branch)}"
         proc = await asyncio.create_subprocess_shell(
             cmd,
@@ -221,7 +227,7 @@ async def approve_push(
         update = Update(
             task_id=task.id,
             type=UpdateType.summary,
-            content=f"Branch {task.branch} pushed to origin. Output: {stdout.decode().strip()}",
+            content=f"Branch {task.branch} pushed to origin.",
             branch=task.branch,
         )
         db.add(update)
@@ -242,7 +248,7 @@ async def approve_push(
     return task
 
 
-# --- Diff preview (for review before push) ---
+# --- Diff & review endpoints ---
 
 
 @router.get("/{task_id}/diff")
@@ -251,41 +257,72 @@ async def get_diff(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(require_auth),
 ):
-    """Get the git diff for the agent's branch vs main."""
+    """Get diff stats and full diff for the agent's branch vs base."""
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if not task.branch:
         raise HTTPException(400, "No branch set")
 
-    # Get the default branch
-    cmd_default = f"git -C {shlex.quote(task.repo_url)} symbolic-ref refs/remotes/origin/HEAD --short"
-    proc = await asyncio.create_subprocess_shell(
-        cmd_default,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-    default_branch = stdout.decode().strip().replace("origin/", "") if proc.returncode == 0 else "main"
+    repo_path = task.repo_url
+    base = task.base_branch or await _detect_default_branch(repo_path)
 
-    # Get diff
-    cmd = f"git -C {shlex.quote(task.repo_url)} diff {shlex.quote(default_branch)}..{shlex.quote(task.branch)}"
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
+    # Get structured diff stats
+    stats = await get_diff_stats(repo_path, base, task.branch)
 
-    if proc.returncode != 0:
-        raise HTTPException(500, f"Diff failed: {stderr.decode().strip()}")
+    # Get full diff
+    code, full_diff, stderr = await _git(
+        repo_path, "diff", f"{base}..{task.branch}",
+    )
+    if code != 0:
+        raise HTTPException(500, f"Diff failed: {stderr}")
 
     return {
         "task_id": task.id,
         "branch": task.branch,
-        "base": default_branch,
-        "diff": stdout.decode(),
+        "base": base,
+        "diff": full_diff,
+        "stats": stats,
     }
+
+
+@router.get("/{task_id}/diff/{file_path:path}")
+async def get_single_file_diff(
+    task_id: int,
+    file_path: str,
+    db: AsyncSession = Depends(get_db),
+    user: str = Depends(require_auth),
+):
+    """Get diff for a single file."""
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if not task.branch:
+        raise HTTPException(400, "No branch set")
+
+    repo_path = task.repo_url
+    base = task.base_branch or await _detect_default_branch(repo_path)
+    diff = await get_file_diff(repo_path, base, task.branch, file_path)
+
+    return {"file": file_path, "diff": diff}
+
+
+@router.get("/{task_id}/commits")
+async def get_task_commits(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: str = Depends(require_auth),
+):
+    """Get commit log for this task's branch."""
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if not task.branch:
+        return []
+
+    repo_path = task.repo_url
+    base = task.base_branch or await _detect_default_branch(repo_path)
+    return await get_commits(repo_path, base, task.branch)
 
 
 # --- Messages (follow-up instructions) ---

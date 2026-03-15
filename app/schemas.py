@@ -14,6 +14,7 @@ class TaskCreate(BaseModel):
     description: str
     repo_url: str
     branch: Optional[str] = None
+    base_branch: Optional[str] = None
     agent_type: str = "claude"
 
 
@@ -23,10 +24,12 @@ class TaskOut(BaseModel):
     description: str
     repo_url: str
     branch: Optional[str]
+    base_branch: Optional[str]
     agent_type: str
     status: TaskStatus
     tmux_session: Optional[str]
     codex_session_id: Optional[str]
+    worktree_path: Optional[str]
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
@@ -36,6 +39,7 @@ class TaskOut(BaseModel):
 class TaskPatch(BaseModel):
     status: Optional[TaskStatus] = None
     branch: Optional[str] = None
+    base_branch: Optional[str] = None
 
 
 # --- Updates ---
