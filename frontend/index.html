@@ -1076,16 +1076,35 @@ async function loadDetail() {
     `;
 
     // Actions
-    const btns = [];
-    if (['pending', 'paused', 'needs_review'].includes(task.status))
-        btns.push(`<button class="btn btn--accent" onclick="startTask()">Start agent</button>`);
-    if (task.status === 'running')
-        btns.push(`<button class="btn btn--danger" onclick="stopTask()">Stop agent</button>`);
-    if (task.status === 'needs_review') {
-        if (task.branch) btns.push(`<button class="btn btn--approve" onclick="showReview()">Review changes</button>`);
-        btns.push(`<button class="btn" onclick="approveComplete()">Mark done</button>`);
+    const actEl = document.getElementById('detail-actions');
+    const isCodex = task.agent_type === 'codex';
+    const canResume = isCodex && task.codex_session_id && ['paused', 'needs_review'].includes(task.status);
+    const canStart = ['pending', 'paused', 'needs_review'].includes(task.status);
+
+    let actionsHtml = '<div class="btn-row" style="margin-bottom:8px;">';
+    if (canResume) {
+        // Codex resume: show prompt input + resume button
+        actionsHtml += `<button class="btn btn--accent" onclick="startTask()">Resume (no new prompt)</button>`;
+    } else if (canStart) {
+        actionsHtml += `<button class="btn btn--accent" onclick="startTask()">Start agent</button>`;
     }
-    document.getElementById('detail-actions').innerHTML = btns.join('');
+    if (task.status === 'running')
+        actionsHtml += `<button class="btn btn--danger" onclick="stopTask()">Stop agent</button>`;
+    if (task.status === 'needs_review') {
+        if (task.branch) actionsHtml += `<button class="btn btn--approve" onclick="showReview()">Review changes</button>`;
+        actionsHtml += `<button class="btn" onclick="approveComplete()">Mark done</button>`;
+    }
+    actionsHtml += '</div>';
+
+    if (canResume) {
+        actionsHtml += `
+            <div class="msg-composer" style="margin-top:4px;">
+                <input id="resume-prompt" placeholder="Follow-up instructions for Codex..."
+                       onkeydown="if(event.key==='Enter')startTaskWithPrompt()">
+                <button class="btn btn--accent btn--sm" onclick="startTaskWithPrompt()">Resume with prompt</button>
+            </div>`;
+    }
+    actEl.innerHTML = actionsHtml;
 
     // Live output
     const outSec = document.getElementById('output-section');
@@ -1136,7 +1155,21 @@ async function loadDetail() {
 
 async function startTask() {
     try {
-        await api(`/tasks/${currentTaskId}/start`, { method: 'POST' });
+        await api(`/tasks/${currentTaskId}/start`, { method: 'POST', body: '{}' });
+        await loadDetail();
+    } catch (e) { showToast(e.message); }
+}
+
+async function startTaskWithPrompt() {
+    const input = document.getElementById('resume-prompt');
+    const prompt = input ? input.value.trim() : '';
+    if (!prompt) { showToast('Enter follow-up instructions'); return; }
+    try {
+        await api(`/tasks/${currentTaskId}/start`, {
+            method: 'POST',
+            body: JSON.stringify({ prompt }),
+        });
+        if (input) input.value = '';
         await loadDetail();
     } catch (e) { showToast(e.message); }
 }

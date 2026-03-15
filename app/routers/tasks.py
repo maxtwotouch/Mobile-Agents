@@ -101,22 +101,32 @@ async def patch_task(
     return task
 
 
+class StartRequest(BaseModel):
+    prompt: Optional[str] = None
+
+
 @router.post("/{task_id}/start", response_model=TaskOut)
 async def start_task(
     task_id: int,
+    body: Optional[StartRequest] = None,
     db: AsyncSession = Depends(get_db),
     user: str = Depends(require_auth),
 ):
-    """Spawn an agent in a tmux session for this task."""
+    """Spawn an agent in a tmux session for this task.
+
+    For Codex resume: pass {"prompt": "follow-up instructions"} to send
+    a new prompt instead of re-running the original description.
+    """
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.status == TaskStatus.running:
         raise HTTPException(400, "Task is already running")
 
+    prompt = body.prompt if body else None
     adapter = adapter_for(task)
     try:
-        session_name = await adapter.start(task)
+        session_name = await adapter.start(task, prompt=prompt)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     except FileNotFoundError:

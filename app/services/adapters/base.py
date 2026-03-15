@@ -9,7 +9,7 @@ from app.services.agent import AgentService
 
 class BaseAgentAdapter(ABC):
     @abstractmethod
-    async def start(self, task: Task) -> str:
+    async def start(self, task: Task, prompt: Optional[str] = None) -> str:
         raise NotImplementedError
 
     @abstractmethod

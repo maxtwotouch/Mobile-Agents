@@ -131,25 +131,29 @@ class AgentService:
         message_path.write_text("", encoding="utf-8")
 
         if AgentService.is_codex(task):
-            prompt = (prompt or task.description).strip()
-            if not prompt:
-                raise RuntimeError("Codex task is missing a prompt")
-            session_arg = (
-                f" {shlex.quote(task.codex_session_id)}"
-                if task.codex_session_id
-                else ""
-            )
-            agent_cmd = (
-                "codex exec resume"
-                if task.codex_session_id
-                else "codex exec"
-            )
-            agent_cmd = (
-                f"{agent_cmd} --dangerously-bypass-approvals-and-sandbox "
-                f"--skip-git-repo-check --json "
-                f"-o {shlex.quote(str(message_path))}{session_arg} "
-                f"{shlex.quote(prompt)}"
-            )
+            is_resume = bool(task.codex_session_id)
+
+            if is_resume:
+                # Resume existing session — prompt is optional
+                agent_cmd = (
+                    f"codex exec resume --dangerously-bypass-approvals-and-sandbox "
+                    f"--skip-git-repo-check --json "
+                    f"-o {shlex.quote(str(message_path))} "
+                    f"{shlex.quote(task.codex_session_id)}"
+                )
+                if prompt and prompt.strip():
+                    agent_cmd += f" {shlex.quote(prompt.strip())}"
+            else:
+                # First run — prompt is required
+                effective_prompt = (prompt or task.description or "").strip()
+                if not effective_prompt:
+                    raise RuntimeError("Codex task is missing a prompt")
+                agent_cmd = (
+                    f"codex exec --dangerously-bypass-approvals-and-sandbox "
+                    f"--skip-git-repo-check --json "
+                    f"-o {shlex.quote(str(message_path))} "
+                    f"{shlex.quote(effective_prompt)}"
+                )
             shell_cmd = f"{agent_cmd} 2>&1 | tee -a {shlex.quote(str(log_path))}"
         else:
             agent_cmd = _agent_command(task)

@@ -6,12 +6,24 @@ from app.services.adapters.base import BaseAgentAdapter
 
 
 class ClaudeAdapter(BaseAgentAdapter):
-    async def start(self, task: Task) -> str:
-        branch, worktree_path, base_branch = await AgentService.prepare_repo(task)
-        task.branch = branch
-        task.worktree_path = worktree_path
-        task.base_branch = base_branch
-        return await AgentService.spawn(task, task.description, work_dir=worktree_path)
+    async def start(self, task: Task, prompt: Optional[str] = None) -> str:
+        """Start or restart a Claude Code agent.
+
+        First run: creates worktree, spawns interactive session, sends description.
+        Restart: re-uses existing worktree, spawns fresh session, sends prompt.
+        """
+        is_restart = bool(task.worktree_path)
+
+        if not is_restart:
+            branch, worktree_path, base_branch = await AgentService.prepare_repo(task)
+            task.branch = branch
+            task.worktree_path = worktree_path
+            task.base_branch = base_branch
+
+        work_dir = task.worktree_path or task.repo_url
+        effective_prompt = prompt or task.description
+
+        return await AgentService.spawn(task, effective_prompt, work_dir=work_dir)
 
     async def send_message(self, task: Task, content: str) -> Optional[str]:
         if not task.tmux_session:
