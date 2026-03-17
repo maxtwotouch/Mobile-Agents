@@ -6,7 +6,9 @@ from app.services.adapters.base import BaseAgentAdapter
 
 
 class CodexAdapter(BaseAgentAdapter):
-    async def start(self, task: Task, prompt: Optional[str] = None) -> str:
+    async def start(
+        self, task: Task, prompt: Optional[str] = None, role_prompt: Optional[str] = None
+    ) -> str:
         """Start or resume a Codex agent.
 
         First run: creates worktree, runs `codex exec` with task.description.
@@ -24,6 +26,9 @@ class CodexAdapter(BaseAgentAdapter):
 
         work_dir = task.worktree_path or task.repo_url
         effective_prompt = prompt or (task.description if not is_resume else None)
+
+        if role_prompt and effective_prompt:
+            effective_prompt = f"{role_prompt}\n\n---\n\n## Your Task\n\n{effective_prompt}"
 
         return await AgentService.spawn(task, effective_prompt, work_dir=work_dir)
 

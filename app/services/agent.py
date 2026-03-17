@@ -184,8 +184,16 @@ class AgentService:
                 + (f" Last output:\n{last_output}" if last_output else "")
             )
 
-        if not AgentService.is_codex(task) and task.description.strip():
-            await AgentService.send_message(session_name, task.description)
+        if not AgentService.is_codex(task):
+            # For Claude: send the effective prompt (which may include role template)
+            effective = prompt or task.description
+            if effective and effective.strip():
+                # Write prompt to a file and use tmux load-buffer + paste-buffer
+                # to handle long prompts and special characters reliably
+                prompt_file = RUNTIME_DIR / "prompts" / f"{session_name}.txt"
+                prompt_file.parent.mkdir(parents=True, exist_ok=True)
+                prompt_file.write_text(effective, encoding="utf-8")
+                await AgentService.send_prompt_file(session_name, prompt_file)
 
         return session_name
 
@@ -268,6 +276,45 @@ class AgentService:
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8", errors="replace").strip()
+
+    @staticmethod
+    async def send_prompt_file(session_name: str, prompt_file: Path) -> None:
+        """Send a prompt from a file using tmux load-buffer + paste-buffer.
+
+        This handles long prompts and special characters reliably.
+        """
+        if not _has_tmux():
+            raise RuntimeError("tmux is required for interactive agent messaging")
+        if not await AgentService.is_alive(session_name):
+            raise RuntimeError("Agent session is not running")
+
+        # Load file into tmux buffer
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "load-buffer", str(prompt_file),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to load prompt buffer: {stderr.decode().strip()}")
+
+        # Paste buffer into the session
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "paste-buffer", "-t", session_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to paste prompt: {stderr.decode().strip()}")
+
+        # Send Enter to submit the prompt
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "send-keys", "-t", session_name, "Enter",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
 
     @staticmethod
     async def send_message(session_name: str, content: str) -> None:

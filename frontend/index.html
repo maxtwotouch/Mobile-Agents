@@ -729,6 +729,12 @@
             <label>Instructions</label>
             <textarea id="c-desc" placeholder="Describe the task in detail. The agent will follow these instructions."></textarea>
         </div>
+        <div class="field">
+            <label>Role</label>
+            <select id="c-role" style="padding:10px 14px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);font-size:14px;font-family:var(--sans);">
+                <option value="">No role (generic agent)</option>
+            </select>
+        </div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
             <div class="field">
                 <label>Branch (optional)</label>
@@ -821,6 +827,7 @@ let ws = null;
 let outputInterval = null;
 let selectedRepo = null;
 let repoList = [];
+let roleList = [];
 
 // --- Helpers ---
 
@@ -916,7 +923,7 @@ function show(id) {
 
 function showLogin() { show('v-login'); }
 async function showList() { show('v-list'); await loadTasks(); }
-async function showCreate() { show('v-create'); await loadRepos(); }
+async function showCreate() { show('v-create'); await Promise.all([loadRepos(), loadRoles()]); }
 async function showDetail(id) { currentTaskId = id; show('v-detail'); await loadDetail(); }
 
 // --- WebSocket ---
@@ -1007,6 +1014,19 @@ async function cloneRepo() {
     }
 }
 
+// --- Roles ---
+
+async function loadRoles() {
+    try {
+        roleList = await api('/roles');
+    } catch (e) {
+        roleList = [];
+    }
+    const el = document.getElementById('c-role');
+    el.innerHTML = '<option value="">No role (generic agent)</option>' +
+        roleList.map(r => `<option value="${r.id}">${esc(r.name)} — ${esc(r.description)}</option>`).join('');
+}
+
 // --- Task List ---
 
 async function loadTasks() {
@@ -1027,7 +1047,7 @@ async function loadTasks() {
                 ${statusTag(t.status)}
             </div>
             <div class="task-meta">
-                ${esc(t.agent_type)} · ${esc(repoShortName(t.repo_url))}${t.branch ? ' · ' + esc(t.branch) : ''} · ${timeAgo(t.created_at)}
+                ${esc(t.agent_type)}${t.role_name ? ' · ' + esc(t.role_name) : ''} · ${esc(repoShortName(t.repo_url))}${t.branch ? ' · ' + esc(t.branch) : ''} · ${timeAgo(t.created_at)}
             </div>
         </div>
     `).join('');
@@ -1036,17 +1056,20 @@ async function loadTasks() {
 // --- Create ---
 
 async function createTask() {
+    const roleVal = document.getElementById('c-role').value;
     const body = {
         title: document.getElementById('c-title').value,
         description: document.getElementById('c-desc').value,
         repo_url: document.getElementById('c-repo').value || selectedRepo,
         branch: document.getElementById('c-branch').value || null,
         agent_type: document.getElementById('c-agent').value,
+        role_id: roleVal ? parseInt(roleVal) : null,
     };
     if (!body.title || !body.repo_url) { showToast('Title and repository are required'); return; }
     try {
         await api('/tasks', { method: 'POST', body: JSON.stringify(body) });
         ['c-title', 'c-desc', 'c-branch'].forEach(id => document.getElementById(id).value = '');
+        document.getElementById('c-role').value = '';
         selectedRepo = null;
         showList();
     } catch (e) {
@@ -1071,7 +1094,7 @@ async function loadDetail() {
         </div>
         ${task.description ? `<p class="detail-desc">${esc(task.description)}</p>` : ''}
         <div class="detail-meta">
-            ${esc(task.agent_type)} · ${esc(repoShortName(task.repo_url))} · ${esc(task.branch || 'branch pending')}${task.base_branch ? ' (from ' + esc(task.base_branch) + ')' : ''}
+            ${esc(task.agent_type)}${task.role_name ? ' · ' + esc(task.role_name) : ''} · ${esc(repoShortName(task.repo_url))} · ${esc(task.branch || 'branch pending')}${task.base_branch ? ' (from ' + esc(task.base_branch) + ')' : ''}
         </div>
     `;
 

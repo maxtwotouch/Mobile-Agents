@@ -14,11 +14,11 @@ from app.schemas import (
     MessageCreate,
     MessageOut,
     TaskCreate,
-    TaskOut,
     TaskPatch,
 )
 from app.services.agent import AgentService
 from app.services.adapters import adapter_for
+from app.models import Role
 from app.services.repo import (
     get_commits,
     get_diff_stats,
@@ -31,7 +31,18 @@ from app.ws import broadcast
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@router.post("", response_model=TaskOut, status_code=201)
+async def _task_out(task: Task, db: AsyncSession) -> dict:
+    """Serialize a Task to a dict, including role_name."""
+    data = {c.name: getattr(task, c.name) for c in task.__table__.columns}
+    if task.role_id:
+        role = await db.get(Role, task.role_id)
+        data["role_name"] = role.name if role else None
+    else:
+        data["role_name"] = None
+    return data
+
+
+@router.post("", response_model=None, status_code=201)
 async def create_task(
     body: TaskCreate,
     db: AsyncSession = Depends(get_db),
@@ -44,12 +55,13 @@ async def create_task(
         branch=body.branch,
         base_branch=body.base_branch,
         agent_type=body.agent_type,
+        role_id=body.role_id,
     )
     db.add(task)
     await db.commit()
     await db.refresh(task)
     await broadcast({"type": "task_created", "task_id": task.id, "title": task.title})
-    return task
+    return await _task_out(task, db)
 
 
 @router.get("", response_model=None)
@@ -62,10 +74,11 @@ async def list_tasks(
     if status:
         stmt = stmt.where(Task.status == status)
     result = await db.execute(stmt)
-    return result.scalars().all()
+    tasks = result.scalars().all()
+    return [await _task_out(t, db) for t in tasks]
 
 
-@router.get("/{task_id}", response_model=TaskOut)
+@router.get("/{task_id}", response_model=None)
 async def get_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
@@ -74,10 +87,10 @@ async def get_task(
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    return task
+    return await _task_out(task, db)
 
 
-@router.patch("/{task_id}", response_model=TaskOut)
+@router.patch("/{task_id}", response_model=None)
 async def patch_task(
     task_id: int,
     body: TaskPatch,
@@ -98,14 +111,14 @@ async def patch_task(
     await broadcast(
         {"type": "task_update", "task_id": task.id, "status": task.status.value}
     )
-    return task
+    return await _task_out(task, db)
 
 
 class StartRequest(BaseModel):
     prompt: Optional[str] = None
 
 
-@router.post("/{task_id}/start", response_model=TaskOut)
+@router.post("/{task_id}/start", response_model=None)
 async def start_task(
     task_id: int,
     body: Optional[StartRequest] = None,
@@ -125,8 +138,18 @@ async def start_task(
 
     prompt = body.prompt if body else None
     adapter = adapter_for(task)
+
+    # Load role template if task has a role assigned
+    role_prompt = None
+    if task.role_id:
+        from app.services.roles import load_role_for_task, load_template
+
+        role = await load_role_for_task(db, task.role_id)
+        if role:
+            role_prompt = load_template(role.template_path)
+
     try:
-        session_name = await adapter.start(task, prompt=prompt)
+        session_name = await adapter.start(task, prompt=prompt, role_prompt=role_prompt)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     except FileNotFoundError:
@@ -140,10 +163,10 @@ async def start_task(
     await broadcast(
         {"type": "task_update", "task_id": task.id, "status": "running"}
     )
-    return task
+    return await _task_out(task, db)
 
 
-@router.post("/{task_id}/stop", response_model=TaskOut)
+@router.post("/{task_id}/stop", response_model=None)
 async def stop_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
@@ -158,7 +181,7 @@ async def stop_task(
     await broadcast(
         {"type": "task_update", "task_id": task.id, "status": "paused"}
     )
-    return task
+    return await _task_out(task, db)
 
 
 # --- Live tmux output ---
@@ -197,7 +220,7 @@ class PushApproval(BaseModel):
     approve: bool
 
 
-@router.post("/{task_id}/push", response_model=TaskOut)
+@router.post("/{task_id}/push", response_model=None)
 async def approve_push(
     task_id: int,
     body: PushApproval,
@@ -255,7 +278,7 @@ async def approve_push(
     await broadcast(
         {"type": "task_update", "task_id": task.id, "status": task.status.value}
     )
-    return task
+    return await _task_out(task, db)
 
 
 # --- Diff & review endpoints ---

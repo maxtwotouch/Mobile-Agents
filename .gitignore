@@ -29,8 +29,11 @@ pip-wheel-metadata/
 .coverage.*
 htmlcov/
 
-# Frontend dependencies
+# Frontend dependencies and build output
 node_modules/
+frontend-dist/
+web/node_modules/
+bun.lock
 
 # Editor and OS files
 .DS_Store

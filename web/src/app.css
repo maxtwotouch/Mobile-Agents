@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=Instrument+Serif:ital@0;1&display=swap');
+
+:root {
+  --bg: #12110f;
+  --bg-raised: #1c1a17;
+  --bg-input: #0d0c0b;
+  --border: #2a2723;
+  --border-light: #3a3630;
+  --text: #d8d0c4;
+  --text-dim: #8a8279;
+  --text-faint: #5c564e;
+  --accent: #c9a94e;
+  --accent-dim: #8a7535;
+  --red: #c45c4a;
+  --green: #6b9a5c;
+  --amber: #c9a94e;
+  --blue: #5c8ab0;
+  --serif: 'Instrument Serif', Georgia, serif;
+  --sans: 'DM Sans', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  width: 100%;
+  min-height: 100dvh;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  body { padding-bottom: env(safe-area-inset-bottom); }
+}

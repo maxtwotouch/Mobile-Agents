@@ -24,6 +24,16 @@ async def run_startup_migrations() -> None:
             await conn.execute(
                 text("ALTER TABLE tasks ADD COLUMN base_branch VARCHAR(200)")
             )
+        if "role_id" not in columns:
+            await conn.execute(
+                text("ALTER TABLE tasks ADD COLUMN role_id INTEGER REFERENCES roles(id)")
+            )
+        if "parent_task_id" not in columns:
+            await conn.execute(
+                text(
+                    "ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id)"
+                )
+            )
 
 
 async def get_db():

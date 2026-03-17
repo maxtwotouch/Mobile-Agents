@@ -31,6 +31,19 @@ class MessageDirection(str, enum.Enum):
     agent_to_user = "agent_to_user"
 
 
+class Role(Base):
+    __tablename__ = "roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    template_path: Mapped[str] = mapped_column(String(500))
+    can_spawn: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
 class Task(Base):
     __tablename__ = "tasks"
 
@@ -49,6 +62,12 @@ class Task(Base):
     )
     worktree_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     base_branch: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    role_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("roles.id"), nullable=True
+    )
+    parent_task_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("tasks.id"), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -56,6 +75,10 @@ class Task(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
+    role: Mapped[Optional["Role"]] = relationship()
+    parent_task: Mapped[Optional["Task"]] = relationship(
+        remote_side=[id], backref="child_tasks"
+    )
     updates: Mapped[List["Update"]] = relationship(back_populates="task")
     messages: Mapped[List["Message"]] = relationship(back_populates="task")
 

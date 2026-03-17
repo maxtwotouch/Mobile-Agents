@@ -6,6 +6,18 @@ from pydantic import BaseModel
 from app.models import MessageDirection, TaskStatus, UpdateType
 
 
+# --- Roles ---
+
+
+class RoleOut(BaseModel):
+    id: int
+    name: str
+    description: str
+    can_spawn: Optional[list[str]] = None
+
+    model_config = {"from_attributes": True}
+
+
 # --- Tasks ---
 
 
@@ -16,6 +28,7 @@ class TaskCreate(BaseModel):
     branch: Optional[str] = None
     base_branch: Optional[str] = None
     agent_type: str = "claude"
+    role_id: Optional[int] = None
 
 
 class TaskOut(BaseModel):
@@ -30,6 +43,9 @@ class TaskOut(BaseModel):
     tmux_session: Optional[str]
     codex_session_id: Optional[str]
     worktree_path: Optional[str]
+    role_id: Optional[int] = None
+    role_name: Optional[str] = None
+    parent_task_id: Optional[int] = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
