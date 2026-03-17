@@ -12,10 +12,16 @@ class Base(DeclarativeBase):
 
 class TaskStatus(str, enum.Enum):
     pending = "pending"
-    running = "running"
     paused = "paused"
     needs_review = "needs_review"
     completed = "completed"
+    failed = "failed"
+
+
+class RuntimeStatus(str, enum.Enum):
+    idle = "idle"
+    running = "running"
+    stopped = "stopped"
     failed = "failed"
 
 
@@ -56,12 +62,28 @@ class Task(Base):
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus), default=TaskStatus.pending
     )
-    tmux_session: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    workflow_status: Mapped[TaskStatus] = mapped_column(
+        Enum(TaskStatus), default=TaskStatus.pending
+    )
+    runtime_status: Mapped[RuntimeStatus] = mapped_column(
+        Enum(RuntimeStatus), default=RuntimeStatus.idle
+    )
+    thread_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    runner_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     codex_session_id: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True
     )
     worktree_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     base_branch: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    last_run_started_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    last_run_finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    last_heartbeat_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
     role_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("roles.id"), nullable=True
     )
@@ -79,8 +101,30 @@ class Task(Base):
     parent_task: Mapped[Optional["Task"]] = relationship(
         remote_side=[id], backref="child_tasks"
     )
+    runs: Mapped[List["Run"]] = relationship(back_populates="task")
     updates: Mapped[List["Update"]] = relationship(back_populates="task")
     messages: Mapped[List["Message"]] = relationship(back_populates="task")
+
+
+class Run(Base):
+    __tablename__ = "runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"))
+    thread_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    runner_id: Mapped[str] = mapped_column(String(100))
+    status: Mapped[RuntimeStatus] = mapped_column(Enum(RuntimeStatus))
+    prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+
+    task: Mapped["Task"] = relationship(back_populates="runs")
 
 
 class Update(Base):

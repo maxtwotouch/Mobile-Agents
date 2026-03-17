@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -68,9 +69,23 @@ async def repo_info(repo_path: str) -> dict:
     if code != 0:
         remote_url = None
 
-    # Branch list
-    code, branch_output, _ = await _git(repo_path, "branch", "--format=%(refname:short)")
-    branches = [b.strip() for b in branch_output.splitlines() if b.strip()] if code == 0 else []
+    # Branch list: local + remote, normalized to short names.
+    branch_names: set[str] = set()
+    code, branch_output, _ = await _git(
+        repo_path, "branch", "--format=%(refname:short)"
+    )
+    if code == 0:
+        branch_names.update(b.strip() for b in branch_output.splitlines() if b.strip())
+    code, remote_branch_output, _ = await _git(
+        repo_path, "branch", "-r", "--format=%(refname:short)"
+    )
+    if code == 0:
+        for branch in remote_branch_output.splitlines():
+            short = branch.strip()
+            if not short or short.endswith("/HEAD"):
+                continue
+            branch_names.add(short.replace("origin/", "", 1))
+    branches = sorted(branch_names)
 
     # Last commit
     code, last_commit, _ = await _git(repo_path, "log", "-1", "--format=%h %s")
@@ -130,24 +145,41 @@ async def create_worktree(repo_path: str, branch: str, task_id: int) -> str:
     workspace = _ensure_workspace()
     worktree_dir = workspace / ".worktrees" / f"task-{task_id}"
 
-    # Clean up existing worktree if it exists
+    # Clean up existing worktree if it exists. A previous crash can leave
+    # behind an orphaned directory that is no longer registered with git.
     if worktree_dir.exists():
         await _git(repo_path, "worktree", "remove", str(worktree_dir), "--force")
+        if worktree_dir.exists():
+            shutil.rmtree(worktree_dir, ignore_errors=True)
 
     # Fetch latest
     await _git(repo_path, "fetch", "--all")
 
-    # Does the branch already exist?
+    # Does the branch already exist locally?
     code, _, _ = await _git(repo_path, "rev-parse", "--verify", f"refs/heads/{branch}")
     if code == 0:
-        # Branch exists — create worktree from it
         code, _, stderr = await _git(repo_path, "worktree", "add", str(worktree_dir), branch)
     else:
-        # Create new branch from default
-        default_branch = await _detect_default_branch(repo_path)
-        code, _, stderr = await _git(
-            repo_path, "worktree", "add", "-b", branch, str(worktree_dir), default_branch
+        # If the branch exists on origin, create a local tracking branch in the worktree.
+        remote_code, _, _ = await _git(
+            repo_path, "rev-parse", "--verify", f"refs/remotes/origin/{branch}"
         )
+        if remote_code == 0:
+            code, _, stderr = await _git(
+                repo_path,
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                str(worktree_dir),
+                f"origin/{branch}",
+            )
+        else:
+            # Create new branch from default
+            default_branch = await _detect_default_branch(repo_path)
+            code, _, stderr = await _git(
+                repo_path, "worktree", "add", "-b", branch, str(worktree_dir), default_branch
+            )
 
     if code != 0:
         raise RuntimeError(f"Failed to create worktree: {stderr}")

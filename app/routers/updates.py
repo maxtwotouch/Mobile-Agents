@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.database import get_db
-from app.models import Task, TaskStatus, Update, UpdateType
+from app.models import RuntimeStatus, Task, TaskStatus, Update, UpdateType
 from app.schemas import UpdateCreate, UpdateOut
 from app.ws import broadcast
 
@@ -38,10 +38,14 @@ async def create_update(
         task.branch = body.branch
 
     if body.type == UpdateType.error:
-        task.status = TaskStatus.needs_review
+        task.workflow_status = TaskStatus.failed
+        task.status = TaskStatus.failed
+        task.runtime_status = RuntimeStatus.failed
 
     if body.type == UpdateType.summary:
+        task.workflow_status = TaskStatus.needs_review
         task.status = TaskStatus.needs_review
+        task.runtime_status = RuntimeStatus.idle
 
     await db.commit()
     await db.refresh(update)

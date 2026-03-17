@@ -12,9 +12,13 @@
   let title = $state('')
   let description = $state('')
   let branch = $state('')
+  let baseBranch = $state('')
   let agentType = $state('claude')
   let roleId = $state<number | null>(null)
   let creating = $state(false)
+
+  const selectedRepoData = $derived(repos.find((repo) => repo.path === selectedRepo) || null)
+  const availableBranches = $derived(selectedRepoData?.branches || [])
 
   onMount(async () => {
     try {
@@ -28,6 +32,9 @@
 
   function selectRepo(path: string) {
     selectedRepo = selectedRepo === path ? null : path
+    const repo = repos.find((r) => r.path === path)
+    baseBranch = repo?.default_branch || ''
+    branch = ''
   }
 
   async function handleClone() {
@@ -37,6 +44,7 @@
       const repo = await apiClone(cloneUrl.trim())
       repos = [...repos, repo]
       selectedRepo = repo.path
+      baseBranch = repo.default_branch || ''
       cloneUrl = ''
       showToast(`Cloned ${repo.name}`)
     } catch (e: any) {
@@ -56,6 +64,7 @@
         description: description.trim(),
         repo_url: selectedRepo,
         branch: branch.trim() || null,
+        base_branch: baseBranch.trim() || null,
         agent_type: agentType,
         role_id: roleId,
       })
@@ -150,12 +159,32 @@
     </div>
   </div>
 
-  <!-- Branch + Agent type -->
+  <!-- Branch targeting -->
   <div class="row-2">
     <div class="field">
-      <label for="c-branch">Branch</label>
-      <input id="c-branch" class="input" bind:value={branch} placeholder="Auto: agent/task-N" />
+      <label for="c-branch">Focus Branch</label>
+      <select id="c-branch" class="input select" bind:value={branch} disabled={!selectedRepoData}>
+        <option value="">Create new task branch</option>
+        {#each availableBranches as repoBranch}
+          <option value={repoBranch}>{repoBranch}</option>
+        {/each}
+      </select>
+      <p class="hint">Pick an existing branch to review or continue, or leave blank to create a new task branch.</p>
     </div>
+    <div class="field">
+      <label for="c-base-branch">Base Branch</label>
+      <select id="c-base-branch" class="input select" bind:value={baseBranch} disabled={!selectedRepoData}>
+        <option value="">Auto-detect</option>
+        {#each availableBranches as repoBranch}
+          <option value={repoBranch}>{repoBranch}</option>
+        {/each}
+      </select>
+      <p class="hint">This is the branch diffs and reviews compare against.</p>
+    </div>
+  </div>
+
+  <!-- Agent type -->
+  <div class="row-2">
     <div class="field">
       <label for="c-agent">Agent</label>
       <select id="c-agent" class="input select" bind:value={agentType}>

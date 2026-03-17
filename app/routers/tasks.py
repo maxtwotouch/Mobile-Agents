@@ -1,5 +1,6 @@
 import asyncio
 import shlex
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,16 +10,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.database import get_db
-from app.models import Message, MessageDirection, Task, TaskStatus, Update, UpdateType
+from app.models import (
+    Message,
+    MessageDirection,
+    Role,
+    Run,
+    RuntimeStatus,
+    Task,
+    TaskStatus,
+    Update,
+    UpdateType,
+)
 from app.schemas import (
     MessageCreate,
     MessageOut,
+    RunOut,
     TaskCreate,
     TaskPatch,
 )
 from app.services.agent import AgentService
 from app.services.adapters import adapter_for
-from app.models import Role
 from app.services.repo import (
     get_commits,
     get_diff_stats,
@@ -34,12 +45,54 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 async def _task_out(task: Task, db: AsyncSession) -> dict:
     """Serialize a Task to a dict, including role_name."""
     data = {c.name: getattr(task, c.name) for c in task.__table__.columns}
+    data["status"] = task.workflow_status.value
     if task.role_id:
         role = await db.get(Role, task.role_id)
         data["role_name"] = role.name if role else None
     else:
         data["role_name"] = None
     return data
+
+
+async def _start_run_record(
+    db: AsyncSession, task: Task, prompt: Optional[str], runner_id: str
+) -> Run:
+    run = Run(
+        task_id=task.id,
+        thread_id=task.thread_id,
+        runner_id=runner_id,
+        status=RuntimeStatus.running,
+        prompt=prompt,
+    )
+    db.add(run)
+    return run
+
+
+async def _finish_active_run(
+    db: AsyncSession,
+    task: Task,
+    *,
+    status: RuntimeStatus,
+    runner_id: Optional[str] = None,
+    exit_code: Optional[int] = None,
+    error: Optional[str] = None,
+) -> None:
+    runner_id = runner_id or task.runner_id
+    if not runner_id:
+        return
+    stmt = (
+        select(Run)
+        .where(Run.task_id == task.id, Run.runner_id == runner_id)
+        .order_by(Run.started_at.desc())
+    )
+    result = await db.execute(stmt)
+    run = result.scalars().first()
+    if not run:
+        return
+    run.status = status
+    run.exit_code = exit_code
+    run.error = error
+    run.finished_at = datetime.now(timezone.utc)
 
 
 @router.post("", response_model=None, status_code=201)
@@ -55,6 +108,8 @@ async def create_task(
         branch=body.branch,
         base_branch=body.base_branch,
         agent_type=body.agent_type,
+        status=TaskStatus.pending,
+        workflow_status=TaskStatus.pending,
         role_id=body.role_id,
     )
     db.add(task)
@@ -72,7 +127,7 @@ async def list_tasks(
 ):
     stmt = select(Task).order_by(Task.created_at.desc())
     if status:
-        stmt = stmt.where(Task.status == status)
+        stmt = stmt.where(Task.workflow_status == status)
     result = await db.execute(stmt)
     tasks = result.scalars().all()
     return [await _task_out(t, db) for t in tasks]
@@ -100,8 +155,11 @@ async def patch_task(
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if body.status is not None:
-        task.status = body.status
+    if body.workflow_status is not None:
+        task.workflow_status = body.workflow_status
+        task.status = body.workflow_status
+    if body.runtime_status is not None:
+        task.runtime_status = body.runtime_status
     if body.branch is not None:
         task.branch = body.branch
     if body.base_branch is not None:
@@ -109,7 +167,13 @@ async def patch_task(
     await db.commit()
     await db.refresh(task)
     await broadcast(
-        {"type": "task_update", "task_id": task.id, "status": task.status.value}
+        {
+            "type": "task_update",
+            "task_id": task.id,
+            "workflow_status": task.workflow_status.value,
+            "runtime_status": task.runtime_status.value,
+            "status": task.workflow_status.value,
+        }
     )
     return await _task_out(task, db)
 
@@ -125,15 +189,11 @@ async def start_task(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(require_auth),
 ):
-    """Spawn an agent in a tmux session for this task.
-
-    For Codex resume: pass {"prompt": "follow-up instructions"} to send
-    a new prompt instead of re-running the original description.
-    """
+    """Start or resume an agent run for this task."""
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.status == TaskStatus.running:
+    if task.runtime_status == RuntimeStatus.running:
         raise HTTPException(400, "Task is already running")
 
     prompt = body.prompt if body else None
@@ -149,19 +209,28 @@ async def start_task(
             role_prompt = load_template(role.template_path)
 
     try:
-        session_name = await adapter.start(task, prompt=prompt, role_prompt=role_prompt)
+        runner_id = await adapter.start(task, prompt=prompt, role_prompt=role_prompt)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     except FileNotFoundError:
         raise HTTPException(
             400, f"Agent CLI '{task.agent_type}' not found on this machine"
         )
-    task.tmux_session = session_name
-    task.status = TaskStatus.running
+    task.runner_id = runner_id
+    task.runtime_status = RuntimeStatus.running
+    task.last_run_started_at = datetime.now(timezone.utc)
+    task.last_heartbeat_at = task.last_run_started_at
+    await _start_run_record(db, task, prompt, runner_id)
     await db.commit()
     await db.refresh(task)
     await broadcast(
-        {"type": "task_update", "task_id": task.id, "status": "running"}
+        {
+            "type": "task_update",
+            "task_id": task.id,
+            "workflow_status": task.workflow_status.value,
+            "runtime_status": task.runtime_status.value,
+            "status": task.workflow_status.value,
+        }
     )
     return await _task_out(task, db)
 
@@ -175,16 +244,26 @@ async def stop_task(
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
+    runner_id = task.runner_id or AgentService.runner_id(task)
     await adapter_for(task).stop(task)
+    await _finish_active_run(
+        db, task, status=RuntimeStatus.stopped, runner_id=runner_id
+    )
     await db.commit()
     await db.refresh(task)
     await broadcast(
-        {"type": "task_update", "task_id": task.id, "status": "paused"}
+        {
+            "type": "task_update",
+            "task_id": task.id,
+            "workflow_status": task.workflow_status.value,
+            "runtime_status": task.runtime_status.value,
+            "status": task.workflow_status.value,
+        }
     )
     return await _task_out(task, db)
 
 
-# --- Live tmux output ---
+# --- Live run output ---
 
 
 @router.get("/{task_id}/output")
@@ -197,20 +276,46 @@ async def get_output(
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if not task.tmux_session:
-        raise HTTPException(400, "No active tmux session")
 
     adapter = adapter_for(task)
     alive = await adapter.is_alive(task)
+    task.last_heartbeat_at = datetime.now(timezone.utc)
     output = await adapter.capture_output(task, lines)
 
-    if not alive:
+    ended = False
+    if task.runtime_status == RuntimeStatus.running and not alive:
+        finished_runner_id = task.runner_id or AgentService.runner_id(task)
+        exit_code = AgentService.consume_exit_code(finished_runner_id)
+        run_status = (
+            RuntimeStatus.failed if exit_code not in (0, None) else RuntimeStatus.idle
+        )
         for record in adapter.finalize_records(task, output):
             db.add(record)
+        if run_status == RuntimeStatus.failed:
+            task.workflow_status = TaskStatus.failed
+            task.status = TaskStatus.failed
+            if output.strip():
+                db.add(
+                    Update(
+                        task_id=task.id,
+                        type=UpdateType.error,
+                        content=output.strip(),
+                        branch=task.branch,
+                    )
+                )
+        await _finish_active_run(
+            db,
+            task,
+            status=run_status,
+            runner_id=finished_runner_id,
+            exit_code=exit_code,
+        )
+        task.runtime_status = run_status
         await db.commit()
-        raise HTTPException(409, "Agent session ended")
+        ended = True
 
-    return {"task_id": task.id, "alive": alive, "output": output}
+    await db.commit()
+    return {"task_id": task.id, "alive": alive, "ended": ended, "output": output}
 
 
 # --- Push approval flow ---
@@ -230,7 +335,7 @@ async def approve_push(
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.status != TaskStatus.needs_review:
+    if task.workflow_status != TaskStatus.needs_review:
         raise HTTPException(400, "Task is not awaiting review")
     if not task.branch:
         raise HTTPException(400, "No branch set for this task")
@@ -256,6 +361,7 @@ async def approve_push(
             await db.commit()
             raise HTTPException(500, f"Push failed: {error_msg}")
 
+        task.workflow_status = TaskStatus.completed
         task.status = TaskStatus.completed
         update = Update(
             task_id=task.id,
@@ -265,6 +371,7 @@ async def approve_push(
         )
         db.add(update)
     else:
+        task.workflow_status = TaskStatus.paused
         task.status = TaskStatus.paused
         update = Update(
             task_id=task.id,
@@ -276,7 +383,13 @@ async def approve_push(
     await db.commit()
     await db.refresh(task)
     await broadcast(
-        {"type": "task_update", "task_id": task.id, "status": task.status.value}
+        {
+            "type": "task_update",
+            "task_id": task.id,
+            "workflow_status": task.workflow_status.value,
+            "runtime_status": task.runtime_status.value,
+            "status": task.workflow_status.value,
+        }
     )
     return await _task_out(task, db)
 
@@ -380,9 +493,13 @@ async def send_message(
 
     if body.direction == MessageDirection.user_to_agent:
         try:
-            new_session = await adapter_for(task).send_message(task, body.content)
-            if new_session:
-                task.tmux_session = new_session
+            new_runner = await adapter_for(task).send_message(task, body.content)
+            if new_runner:
+                task.runner_id = new_runner
+            task.runtime_status = RuntimeStatus.running
+            task.last_run_started_at = datetime.now(timezone.utc)
+            task.last_heartbeat_at = task.last_run_started_at
+            await _start_run_record(db, task, body.content, task.runner_id or AgentService.runner_id(task))
         except RuntimeError as e:
             raise HTTPException(400, str(e))
 
@@ -396,7 +513,28 @@ async def send_message(
             "content": body.content,
         }
     )
+    if body.direction == MessageDirection.user_to_agent:
+        await broadcast(
+            {
+                "type": "task_update",
+                "task_id": task.id,
+                "workflow_status": task.workflow_status.value,
+                "runtime_status": task.runtime_status.value,
+                "status": task.workflow_status.value,
+            }
+        )
     return msg
+
+
+@router.get("/{task_id}/runs", response_model=list[RunOut])
+async def list_runs(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: str = Depends(require_auth),
+):
+    stmt = select(Run).where(Run.task_id == task_id).order_by(Run.started_at.desc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 @router.get("/{task_id}/messages", response_model=None)

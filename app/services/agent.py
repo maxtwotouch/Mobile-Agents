@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 from pathlib import Path
@@ -9,34 +10,21 @@ from typing import Dict, Optional
 
 logger = logging.getLogger("agent")
 
-# Track background processes when tmux is not available
 _processes: Dict[str, asyncio.subprocess.Process] = {}
-_output_buffers: Dict[str, list] = {}
+_output_buffers: Dict[str, list[str]] = {}
+_reader_tasks: Dict[str, asyncio.Task] = {}
+_exit_codes: Dict[str, int] = {}
 
 OUTPUT_BUFFER_LINES = 200
-STARTUP_GRACE_SECONDS = 1.0
 RUNTIME_DIR = Path(os.environ.get("MA_RUNTIME_DIR", "/tmp/mobile_agents"))
 LOG_DIR = RUNTIME_DIR / "logs"
 MESSAGE_DIR = RUNTIME_DIR / "messages"
-
-
-def _has_tmux() -> bool:
-    return shutil.which("tmux") is not None
-
-
-def _shell() -> str:
-    return os.environ.get("SHELL") or "/bin/sh"
+PROMPT_DIR = RUNTIME_DIR / "prompts"
+TRANSCRIPT_DIR = RUNTIME_DIR / "transcripts"
 
 
 def _agent_binary(task) -> str:
     return "codex" if task.agent_type == "codex" else "claude"
-
-
-def _agent_command(task) -> str:
-    binary = _agent_binary(task)
-    if binary == "codex":
-        return f"{binary} --dangerously-bypass-approvals-and-sandbox --no-alt-screen"
-    return f"{binary} --dangerously-skip-permissions"
 
 
 def _ensure_repo_path(repo_path: str) -> None:
@@ -46,14 +34,28 @@ def _ensure_repo_path(repo_path: str) -> None:
         raise RuntimeError(f"Repository path does not exist: {repo_path}")
 
 
-def _log_path(session_name: str) -> Path:
+def _safe_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
+
+
+def _log_path(runner_id: str) -> Path:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    return LOG_DIR / f"{session_name}.log"
+    return LOG_DIR / f"{_safe_name(runner_id)}.log"
 
 
-def _message_path(session_name: str) -> Path:
+def _message_path(runner_id: str) -> Path:
     MESSAGE_DIR.mkdir(parents=True, exist_ok=True)
-    return MESSAGE_DIR / f"{session_name}.txt"
+    return MESSAGE_DIR / f"{_safe_name(runner_id)}.txt"
+
+
+def _prompt_path(runner_id: str) -> Path:
+    PROMPT_DIR.mkdir(parents=True, exist_ok=True)
+    return PROMPT_DIR / f"{_safe_name(runner_id)}.txt"
+
+
+def _transcript_path(thread_id: str) -> Path:
+    TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+    return TRANSCRIPT_DIR / f"{_safe_name(thread_id)}.md"
 
 
 def _tail_lines(path: Path, lines: int) -> str:
@@ -65,7 +67,10 @@ def _tail_lines(path: Path, lines: int) -> str:
 
 async def _run_git(repo_path: str, *args: str) -> tuple[int, str, str]:
     proc = await asyncio.create_subprocess_exec(
-        "git", "-C", repo_path, *args,
+        "git",
+        "-C",
+        repo_path,
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -77,8 +82,36 @@ async def _run_git(repo_path: str, *args: str) -> tuple[int, str, str]:
     )
 
 
+async def _read_output(
+    runner_id: str, proc: asyncio.subprocess.Process, log_path: Path
+) -> None:
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as log_file:
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                decoded = line.decode(errors="replace").rstrip("\n")
+                log_file.write(decoded + "\n")
+                log_file.flush()
+                buf = _output_buffers.get(runner_id)
+                if buf is not None:
+                    buf.append(decoded)
+                    if len(buf) > OUTPUT_BUFFER_LINES:
+                        del buf[: len(buf) - OUTPUT_BUFFER_LINES]
+        await proc.wait()
+    except Exception:
+        logger.exception("Error reading output for %s", runner_id)
+    finally:
+        if proc.returncode is not None:
+            _exit_codes[runner_id] = proc.returncode
+        _processes.pop(runner_id, None)
+        _reader_tasks.pop(runner_id, None)
+
+
 class AgentService:
-    """Manages agent processes via tmux (preferred) or subprocess fallback."""
+    """Manages agent runs as background subprocesses with durable thread IDs."""
 
     @staticmethod
     def is_codex(task) -> bool:
@@ -89,17 +122,37 @@ class AgentService:
         return f"agent/task-{task.id}"
 
     @staticmethod
-    async def prepare_repo(task) -> tuple[str, str, str]:
-        """Validate repo, create worktree, return (branch, worktree_path, base_branch).
+    def default_thread_id(task) -> str:
+        return f"{task.agent_type}-task-{task.id}"
 
-        Uses git worktrees so each task gets an isolated working copy.
-        """
-        from app.services.repo import create_worktree, _detect_default_branch
+    @staticmethod
+    def ensure_thread_id(task) -> str:
+        if not task.thread_id:
+            task.thread_id = task.codex_session_id or AgentService.default_thread_id(task)
+        return task.thread_id
+
+    @staticmethod
+    def runner_id(task) -> str:
+        return task.runner_id or f"task-{task.id}"
+
+    @staticmethod
+    def default_resume_prompt(task) -> str:
+        return (
+            "Continue the task from the existing thread context. "
+            "Inspect the current repository state and proceed."
+        )
+
+    @staticmethod
+    async def prepare_repo(task) -> tuple[str, str, str]:
+        """Validate repo, create worktree, return (branch, worktree_path, base_branch)."""
+        from app.services.repo import _detect_default_branch, create_worktree
 
         repo_path = task.repo_url
         _ensure_repo_path(repo_path)
 
-        code, stdout, stderr = await _run_git(repo_path, "rev-parse", "--is-inside-work-tree")
+        code, stdout, stderr = await _run_git(
+            repo_path, "rev-parse", "--is-inside-work-tree"
+        )
         if code != 0 or stdout != "true":
             raise RuntimeError(
                 f"Repository path is not a git repository: {stderr or repo_path}"
@@ -107,44 +160,38 @@ class AgentService:
 
         branch = task.branch or AgentService.default_branch_name(task)
         base_branch = task.base_branch or await _detect_default_branch(repo_path)
-
         worktree_path = await create_worktree(repo_path, branch, task.id)
-
         return branch, worktree_path, base_branch
 
     @staticmethod
     async def spawn(task, prompt: Optional[str] = None, work_dir: Optional[str] = None) -> str:
-        """Spawn an agent run. Uses worktree_path as working directory if provided."""
-        session_name = f"agent-{task.id}"
+        """Spawn a background agent run for the task."""
+        runner_id = AgentService.runner_id(task)
         cwd = work_dir or task.worktree_path or task.repo_url
         _ensure_repo_path(cwd)
 
         agent_binary = _agent_binary(task)
         if shutil.which(agent_binary) is None:
             raise FileNotFoundError(f"Agent CLI '{agent_binary}' not found")
-        if not _has_tmux():
-            raise RuntimeError("tmux is required for persistent interactive agent sessions")
 
-        log_path = _log_path(session_name)
-        message_path = _message_path(session_name)
+        log_path = _log_path(runner_id)
+        message_path = _message_path(runner_id)
+        prompt_path = _prompt_path(runner_id)
         log_path.write_text("", encoding="utf-8")
         message_path.write_text("", encoding="utf-8")
 
         if AgentService.is_codex(task):
-            is_resume = bool(task.codex_session_id)
-
-            if is_resume:
-                # Resume existing session — prompt is optional
+            if task.thread_id or task.codex_session_id:
+                thread_id = task.thread_id or task.codex_session_id
+                resume_prompt = (prompt or "").strip() or AgentService.default_resume_prompt(task)
                 agent_cmd = (
                     f"codex exec resume --dangerously-bypass-approvals-and-sandbox "
                     f"--skip-git-repo-check --json "
                     f"-o {shlex.quote(str(message_path))} "
-                    f"{shlex.quote(task.codex_session_id)}"
+                    f"{shlex.quote(thread_id)} "
+                    f"{shlex.quote(resume_prompt)}"
                 )
-                if prompt and prompt.strip():
-                    agent_cmd += f" {shlex.quote(prompt.strip())}"
             else:
-                # First run — prompt is required
                 effective_prompt = (prompt or task.description or "").strip()
                 if not effective_prompt:
                     raise RuntimeError("Codex task is missing a prompt")
@@ -154,107 +201,70 @@ class AgentService:
                     f"-o {shlex.quote(str(message_path))} "
                     f"{shlex.quote(effective_prompt)}"
                 )
-            shell_cmd = f"{agent_cmd} 2>&1 | tee -a {shlex.quote(str(log_path))}"
         else:
-            agent_cmd = _agent_command(task)
-            shell_cmd = f"exec {agent_cmd}"
+            effective_prompt = (prompt or task.description or "").strip()
+            if not effective_prompt:
+                raise RuntimeError("Claude task is missing a prompt")
+            prompt_path.write_text(effective_prompt, encoding="utf-8")
+            agent_cmd = (
+                f"cat {shlex.quote(str(prompt_path))} | "
+                f"claude -p --dangerously-skip-permissions "
+                f"--add-dir {shlex.quote(cwd)}"
+            )
 
-        try:
-            await AgentService.kill(session_name)
-        except Exception:
-            pass
+        await AgentService.kill(runner_id)
 
-        proc = await asyncio.create_subprocess_exec(
-            "tmux", "new-session", "-d",
-            "-s", session_name,
-            "-c", cwd,
-            _shell(), "-lc", shell_cmd,
+        proc = await asyncio.create_subprocess_shell(
+            f"{agent_cmd} 2>&1",
+            cwd=cwd,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
         )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"Failed to spawn tmux session: {stderr.decode()}")
-
-        await asyncio.sleep(STARTUP_GRACE_SECONDS)
-        if not await AgentService.is_alive(session_name):
-            last_output = await AgentService.capture_output(session_name)
-            raise RuntimeError(
-                "Agent exited immediately."
-                + (f" Last output:\n{last_output}" if last_output else "")
-            )
-
-        if not AgentService.is_codex(task):
-            # For Claude: send the effective prompt (which may include role template)
-            effective = prompt or task.description
-            if effective and effective.strip():
-                # Write prompt to a file and use tmux load-buffer + paste-buffer
-                # to handle long prompts and special characters reliably
-                prompt_file = RUNTIME_DIR / "prompts" / f"{session_name}.txt"
-                prompt_file.parent.mkdir(parents=True, exist_ok=True)
-                prompt_file.write_text(effective, encoding="utf-8")
-                await AgentService.send_prompt_file(session_name, prompt_file)
-
-        return session_name
+        _processes[runner_id] = proc
+        _output_buffers[runner_id] = []
+        _reader_tasks[runner_id] = asyncio.create_task(
+            _read_output(runner_id, proc, log_path)
+        )
+        return runner_id
 
     @staticmethod
-    async def kill(session_name: str) -> None:
-        if _has_tmux():
-            proc = await asyncio.create_subprocess_shell(
-                f"tmux kill-session -t {session_name}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-        else:
-            proc = _processes.pop(session_name, None)
-            if proc and proc.returncode is None:
-                try:
-                    proc.terminate()
-                    await asyncio.wait_for(proc.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    proc.kill()
-            _output_buffers.pop(session_name, None)
+    async def kill(runner_id: str) -> None:
+        proc = _processes.pop(runner_id, None)
+        reader = _reader_tasks.pop(runner_id, None)
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+        if reader:
+            reader.cancel()
+        _output_buffers.pop(runner_id, None)
 
     @staticmethod
-    async def is_alive(session_name: str) -> bool:
-        if _has_tmux():
-            proc = await asyncio.create_subprocess_shell(
-                f"tmux has-session -t {session_name}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            return proc.returncode == 0
-        else:
-            proc = _processes.get(session_name)
-            return proc is not None and proc.returncode is None
+    async def is_alive(runner_id: str) -> bool:
+        proc = _processes.get(runner_id)
+        if proc is None:
+            return False
+        if proc.returncode is not None:
+            _exit_codes[runner_id] = proc.returncode
+            _processes.pop(runner_id, None)
+            return False
+        return True
 
     @staticmethod
-    async def capture_output(session_name: str, lines: int = 50) -> str:
-        if _has_tmux():
-            proc = await asyncio.create_subprocess_exec(
-                "tmux", "capture-pane", "-t", session_name,
-                "-p", "-S", f"-{lines}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            if proc.returncode == 0:
-                output = stdout.decode()
-                _log_path(session_name).write_text(output, encoding="utf-8")
-                return output
-
-        log_output = _tail_lines(_log_path(session_name), lines)
+    async def capture_output(runner_id: str, lines: int = 50) -> str:
+        log_output = _tail_lines(_log_path(runner_id), lines)
         if log_output:
             return log_output
-
-        buf = _output_buffers.get(session_name, [])
+        buf = _output_buffers.get(runner_id, [])
         return "\n".join(buf[-lines:])
 
     @staticmethod
-    def extract_codex_session_id(session_name: str) -> Optional[str]:
-        log_path = _log_path(session_name)
+    def extract_codex_session_id(runner_id: str) -> Optional[str]:
+        log_path = _log_path(runner_id)
         if not log_path.exists():
             return None
         with log_path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -271,90 +281,33 @@ class AgentService:
         return None
 
     @staticmethod
-    def read_last_message(session_name: str) -> str:
-        path = _message_path(session_name)
+    def read_last_message(runner_id: str) -> str:
+        path = _message_path(runner_id)
+        if path.exists():
+            return path.read_text(encoding="utf-8", errors="replace").strip()
+        return _tail_lines(_log_path(runner_id), 200).strip()
+
+    @staticmethod
+    def read_transcript(thread_id: Optional[str]) -> str:
+        if not thread_id:
+            return ""
+        path = _transcript_path(thread_id)
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8", errors="replace").strip()
 
     @staticmethod
-    async def send_prompt_file(session_name: str, prompt_file: Path) -> None:
-        """Send a prompt from a file using tmux load-buffer + paste-buffer.
-
-        This handles long prompts and special characters reliably.
-        """
-        if not _has_tmux():
-            raise RuntimeError("tmux is required for interactive agent messaging")
-        if not await AgentService.is_alive(session_name):
-            raise RuntimeError("Agent session is not running")
-
-        # Load file into tmux buffer
-        proc = await asyncio.create_subprocess_exec(
-            "tmux", "load-buffer", str(prompt_file),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"Failed to load prompt buffer: {stderr.decode().strip()}")
-
-        # Paste buffer into the session
-        proc = await asyncio.create_subprocess_exec(
-            "tmux", "paste-buffer", "-t", session_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"Failed to paste prompt: {stderr.decode().strip()}")
-
-        # Send Enter to submit the prompt
-        proc = await asyncio.create_subprocess_exec(
-            "tmux", "send-keys", "-t", session_name, "Enter",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
+    def append_transcript(thread_id: Optional[str], speaker: str, content: str) -> None:
+        if not thread_id or not content.strip():
+            return
+        path = _transcript_path(thread_id)
+        existing = ""
+        if path.exists():
+            existing = path.read_text(encoding="utf-8", errors="replace").rstrip()
+        block = f"## {speaker}\n\n{content.strip()}"
+        text = f"{existing}\n\n{block}".strip() if existing else block
+        path.write_text(text + "\n", encoding="utf-8")
 
     @staticmethod
-    async def send_message(session_name: str, content: str) -> None:
-        if not content.strip():
-            return
-        if not _has_tmux():
-            raise RuntimeError("tmux is required for interactive agent messaging")
-        if not await AgentService.is_alive(session_name):
-            raise RuntimeError("Agent session is not running")
-
-        proc = await asyncio.create_subprocess_exec(
-            "tmux", "send-keys", "-t", session_name,
-            content, "Enter",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"Failed to send message to agent: {stderr.decode().strip()}")
-
-
-async def _read_output(
-    session_name: str, proc: asyncio.subprocess.Process, log_path: Path
-):
-    try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a", encoding="utf-8") as log_file:
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                decoded = line.decode(errors="replace").rstrip("\n")
-                log_file.write(decoded + "\n")
-                log_file.flush()
-                buf = _output_buffers.get(session_name)
-                if buf is not None:
-                    buf.append(decoded)
-                    if len(buf) > OUTPUT_BUFFER_LINES:
-                        del buf[: len(buf) - OUTPUT_BUFFER_LINES]
-    except Exception:
-        logger.exception("Error reading output for %s", session_name)
-    finally:
-        _processes.pop(session_name, None)
+    def consume_exit_code(runner_id: str) -> Optional[int]:
+        return _exit_codes.pop(runner_id, None)

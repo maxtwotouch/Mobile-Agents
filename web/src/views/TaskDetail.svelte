@@ -2,14 +2,14 @@
   import { onMount, onDestroy } from 'svelte'
   import {
     fetchTask, fetchUpdates, fetchMessages, startTask, stopTask as apiStop,
-    getOutput, getDiff, getFileDiff, getCommits, pushTask, patchTask,
+    getOutput, getDiff, getFileDiff, getCommits, pushTask, patchTask, fetchRuns, fetchRepos,
     sendMessage as apiSend,
-    type Task, type Update, type Message,
+    type Task, type Update, type Message, type Run, type Repo,
   } from '../lib/api'
   import { navigate, showToast } from '../lib/stores.svelte'
   import { onWsMessage } from '../lib/ws'
   import { roleVisuals } from '../lib/roles'
-  import { timeAgo, repoShortName, colorDiff } from '../lib/utils'
+  import { timeAgo, repoShortName, colorDiff, renderRichText, threadState } from '../lib/utils'
   import RoleIcon from '../components/RoleIcon.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
 
@@ -19,9 +19,13 @@
   let updates = $state<Update[]>([])
   let messages = $state<Message[]>([])
   let output = $state('')
+  let runs = $state<Run[]>([])
+  let repos = $state<Repo[]>([])
   let outputInterval: ReturnType<typeof setInterval> | null = null
   let msgInput = $state('')
   let resumePrompt = $state('')
+  let branchDraft = $state('')
+  let baseBranchDraft = $state('')
 
   // Review state
   let showReview = $state(false)
@@ -33,21 +37,31 @@
 
   const visual = $derived(task?.role_name ? roleVisuals[task.role_name] || null : null)
   const isCodex = $derived(task?.agent_type === 'codex')
-  const canResume = $derived(isCodex && task?.codex_session_id && ['paused', 'needs_review'].includes(task?.status || ''))
-  const canStart = $derived(['pending', 'paused', 'needs_review'].includes(task?.status || ''))
+  const canResume = $derived(isCodex && task?.thread_id && ['paused', 'needs_review', 'failed'].includes(task?.workflow_status || ''))
+  const canStart = $derived(['pending', 'paused', 'needs_review', 'failed'].includes(task?.workflow_status || ''))
+  const runtime = $derived(task ? threadState(task) : null)
+  const taskRepo = $derived(task ? repos.find((repo) => repo.path === task?.repo_url) || null : null)
+  const branchOptions = $derived(taskRepo?.branches || [])
 
   async function load() {
     try {
-      const [t, u, m] = await Promise.all([
+      const [t, u, m, r, repoList] = await Promise.all([
         fetchTask(taskId),
         fetchUpdates(taskId),
         fetchMessages(taskId),
+        fetchRuns(taskId),
+        fetchRepos(),
       ])
       task = t
       updates = u
       messages = m
+      runs = r
+      repos = repoList
+      const repo = repoList.find((entry) => entry.path === t.repo_url) || null
+      branchDraft = t.branch || ''
+      baseBranchDraft = t.base_branch || repo?.default_branch || ''
 
-      if (t.tmux_session && t.status === 'running') {
+      if (t.runtime_status === 'running') {
         refreshOutput()
         if (!outputInterval) outputInterval = setInterval(refreshOutput, 5000)
       } else {
@@ -94,7 +108,18 @@
 
   async function handleComplete() {
     try {
-      await patchTask(taskId, { status: 'completed' })
+      await patchTask(taskId, { workflow_status: 'completed' })
+      await load()
+    } catch (e: any) { showToast(e.message) }
+  }
+
+  async function saveBranches() {
+    try {
+      await patchTask(taskId, {
+        branch: branchDraft || null,
+        base_branch: baseBranchDraft || null,
+      })
+      showToast('Branch target updated')
       await load()
     } catch (e: any) { showToast(e.message) }
   }
@@ -161,8 +186,16 @@
         <div class="detail-header-text">
           <div class="detail-title-row">
             <h1 class="detail-title">{task.title}</h1>
-            <StatusBadge status={task.status} />
+            <StatusBadge status={task.workflow_status} />
           </div>
+          {#if runtime}
+            <div class="runtime-row">
+              <span class="runtime-chip rc-{runtime.tone}">{runtime.label}</span>
+              {#if task.thread_id}
+                <span class="runtime-thread">thread {task.thread_id}</span>
+              {/if}
+            </div>
+          {/if}
           {#if task.description}
             <p class="detail-desc">{task.description}</p>
           {/if}
@@ -183,15 +216,40 @@
       {:else if canStart}
         <button class="btn btn-accent" onclick={() => handleStart()}>Start agent</button>
       {/if}
-      {#if task.status === 'running'}
+      {#if task.runtime_status === 'running'}
         <button class="btn btn-danger" onclick={handleStop}>Stop</button>
       {/if}
-      {#if task.status === 'needs_review'}
+      {#if task.workflow_status === 'needs_review'}
         {#if task.branch}
           <button class="btn btn-approve" onclick={openReview}>Review changes</button>
         {/if}
         <button class="btn" onclick={handleComplete}>Mark done</button>
       {/if}
+    </div>
+
+    <div class="section">
+      <span class="section-label">Branch Target</span>
+      <div class="row-2">
+        <div class="field-tight">
+          <label for="t-branch">Focus Branch</label>
+          <select id="t-branch" class="input select" bind:value={branchDraft}>
+            <option value="">Create new task branch</option>
+            {#each branchOptions as repoBranch}
+              <option value={repoBranch}>{repoBranch}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="field-tight">
+          <label for="t-base-branch">Base Branch</label>
+          <select id="t-base-branch" class="input select" bind:value={baseBranchDraft}>
+            <option value="">Auto-detect</option>
+            {#each branchOptions as repoBranch}
+              <option value={repoBranch}>{repoBranch}</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-sm" onclick={saveBranches}>Save branch target</button>
     </div>
 
     {#if canResume}
@@ -202,7 +260,7 @@
     {/if}
 
     <!-- Live output -->
-    {#if task.status === 'running' && task.tmux_session}
+    {#if task.runtime_status === 'running'}
       <div class="section">
         <div class="section-head">
           <span class="section-label">Live output</span>
@@ -290,13 +348,33 @@
         {#each updates as u}
           <div class="update-item">
             <span class="update-tag ut-{u.type}">{u.type}</span>
-            <span class="update-body">
-              {u.content}
+            <div class="update-body rich-text">
+              {@html renderRichText(u.content)}
               {#if u.commit_sha}
                 <span class="update-sha">{u.commit_sha.slice(0, 7)}</span>
               {/if}
-            </span>
+            </div>
             <span class="update-time">{timeAgo(u.created_at)}</span>
+          </div>
+        {/each}
+      {/if}
+    </div>
+
+    <div class="section">
+      <span class="section-label">Runs</span>
+      {#if runs.length === 0}
+        <p class="hint">No runs yet.</p>
+      {:else}
+        {#each runs as run}
+          <div class="update-item">
+            <span class="update-tag ut-summary">{run.status}</span>
+            <div class="update-body rich-text">
+              {@html renderRichText(run.prompt || 'Run dispatched')}
+              {#if run.exit_code !== null}
+                <span class="update-sha">exit {run.exit_code}</span>
+              {/if}
+            </div>
+            <span class="update-time">{timeAgo(run.started_at)}</span>
           </div>
         {/each}
       {/if}
@@ -311,7 +389,9 @@
         {:else}
           {#each messages as m}
             <div class="msg" class:msg-out={m.direction === 'user_to_agent'} class:msg-in={m.direction !== 'user_to_agent'}>
-              {m.content}
+              <div class="rich-text">
+                {@html renderRichText(m.content)}
+              </div>
               <div class="msg-time">{timeAgo(m.created_at)}</div>
             </div>
           {/each}
@@ -384,6 +464,49 @@
     line-height: 1.2;
   }
 
+  .runtime-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+  }
+
+  .runtime-chip {
+    width: fit-content;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid var(--border-light);
+  }
+
+  .rc-running {
+    color: var(--green);
+    border-color: color-mix(in oklch, var(--green), transparent 70%);
+    background: color-mix(in oklch, var(--green), transparent 92%);
+  }
+
+  .rc-idle {
+    color: var(--accent);
+    border-color: color-mix(in oklch, var(--accent), transparent 70%);
+    background: color-mix(in oklch, var(--accent), transparent 92%);
+  }
+
+  .rc-empty {
+    color: var(--text-faint);
+    border-color: var(--border);
+    background: var(--bg-raised);
+  }
+
+  .runtime-thread {
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: var(--sans);
+  }
+
   .detail-desc {
     font-size: 14px;
     color: var(--text-dim);
@@ -439,6 +562,43 @@
 
   /* Sections */
   .section { padding-top: 20px; }
+
+  .row-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .field-tight {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .field-tight label {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-input);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+  }
+
+  .select {
+    appearance: none;
+    cursor: pointer;
+  }
 
   .section-head {
     display: flex;
@@ -681,6 +841,59 @@
   .msg-time { font-size: 10px; color: var(--text-faint); margin-top: 4px; }
 
   .hint { color: var(--text-faint); font-size: 13px; padding: 8px 0; }
+
+  .rich-text {
+    min-width: 0;
+  }
+
+  :global(.rich-text .rt-heading) {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text);
+    margin: 0 0 8px;
+  }
+
+  :global(.rich-text .rt-paragraph) {
+    margin: 0 0 10px;
+    white-space: normal;
+  }
+
+  :global(.rich-text .rt-paragraph:last-child) {
+    margin-bottom: 0;
+  }
+
+  :global(.rich-text .rt-list) {
+    margin: 0 0 10px 18px;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+
+  :global(.rich-text .rt-list:last-child) {
+    margin-bottom: 0;
+  }
+
+  :global(.rich-text .rt-link) {
+    color: var(--accent);
+    text-decoration: none;
+    word-break: break-all;
+  }
+
+  :global(.rich-text .rt-link:hover) {
+    text-decoration: underline;
+  }
+
+  :global(.rich-text .rt-code) {
+    font-family: 'SF Mono', monospace;
+    font-size: 0.92em;
+    color: var(--text);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 4px;
+  }
 
   .task-link {
     display: inline-flex;

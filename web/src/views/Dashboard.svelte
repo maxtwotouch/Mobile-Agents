@@ -3,8 +3,8 @@
   import { fetchTasks, fetchRoles, type Task, type Role } from '../lib/api'
   import { tasks, roles, navigate, clearAuth, showToast } from '../lib/stores.svelte'
   import { onWsMessage, disconnectWS } from '../lib/ws'
-  import { roleVisuals, statusConfig } from '../lib/roles'
-  import { timeAgo, repoShortName } from '../lib/utils'
+  import { roleVisuals } from '../lib/roles'
+  import { timeAgo, repoShortName, threadState } from '../lib/utils'
   import RoleIcon from '../components/RoleIcon.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import ConnectionDot from '../components/ConnectionDot.svelte'
@@ -12,9 +12,9 @@
   let loading = $state(true)
 
   // Derived stats
-  const running = $derived(tasks.list.filter(t => t.status === 'running').length)
-  const review = $derived(tasks.list.filter(t => t.status === 'needs_review').length)
-  const completed = $derived(tasks.list.filter(t => t.status === 'completed').length)
+  const running = $derived(tasks.list.filter(t => t.runtime_status === 'running').length)
+  const review = $derived(tasks.list.filter(t => t.workflow_status === 'needs_review').length)
+  const completed = $derived(tasks.list.filter(t => t.workflow_status === 'completed').length)
   const total = $derived(tasks.list.length)
 
   // Role distribution
@@ -41,7 +41,9 @@
 
   const unsub = onWsMessage((data) => {
     if (data.type === 'task_update') {
-      showToast(`Task #${data.task_id} — ${data.status || data.message}`)
+      const workflow = data.workflow_status ? `workflow ${data.workflow_status}` : null
+      const runtime = data.runtime_status ? `runtime ${data.runtime_status}` : null
+      showToast(`Task #${data.task_id} — ${workflow || runtime || data.message}`)
     } else if (data.type === 'task_created') {
       showToast(`Created: ${data.title}`)
     }
@@ -134,6 +136,7 @@
     {:else}
       {#each tasks.list as task (task.id)}
         {@const visual = roleVisuals[task.role_name || ''] || null}
+        {@const runtime = threadState(task)}
         <button class="task-item" onclick={() => navigate('detail', task.id)}>
           <div class="task-item-left">
             {#if visual}
@@ -153,9 +156,10 @@
                 {task.branch ? ` · ${task.branch}` : ''}
                 · {timeAgo(task.created_at)}
               </span>
+              <span class="runtime-chip rc-{runtime.tone}">{runtime.label}</span>
             </div>
           </div>
-          <StatusBadge status={task.status} />
+          <StatusBadge status={task.workflow_status} />
         </button>
       {/each}
     {/if}
@@ -348,7 +352,7 @@
   .task-info {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     min-width: 0;
   }
 
@@ -369,6 +373,35 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .runtime-chip {
+    width: fit-content;
+    padding: 3px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid var(--border-light);
+  }
+
+  .rc-running {
+    color: var(--green);
+    border-color: color-mix(in oklch, var(--green), transparent 70%);
+    background: color-mix(in oklch, var(--green), transparent 92%);
+  }
+
+  .rc-idle {
+    color: var(--accent);
+    border-color: color-mix(in oklch, var(--accent), transparent 70%);
+    background: color-mix(in oklch, var(--accent), transparent 92%);
+  }
+
+  .rc-empty {
+    color: var(--text-faint);
+    border-color: var(--border);
+    background: var(--bg-raised);
   }
 
   /* Empty state */

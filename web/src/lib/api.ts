@@ -67,6 +67,7 @@ export interface Repo {
   path: string
   remote_url: string
   default_branch: string
+  branches: string[]
   last_commit?: string
 }
 
@@ -89,9 +90,15 @@ export interface Task {
   base_branch: string | null
   agent_type: string
   status: string
-  tmux_session: string | null
+  workflow_status: string
+  runtime_status: string
+  thread_id: string | null
+  runner_id: string | null
   codex_session_id: string | null
   worktree_path: string | null
+  last_run_started_at: string | null
+  last_run_finished_at: string | null
+  last_heartbeat_at: string | null
   role_id: number | null
   role_name: string | null
   parent_task_id: number | null
@@ -104,6 +111,7 @@ export interface TaskCreate {
   description: string
   repo_url: string
   branch?: string | null
+  base_branch?: string | null
   agent_type: string
   role_id?: number | null
 }
@@ -154,6 +162,23 @@ export async function getFileDiff(id: number, filePath: string) {
 
 export async function getCommits(id: number) {
   return api<any[]>(`/tasks/${id}/commits`)
+}
+
+export interface Run {
+  id: number
+  task_id: number
+  thread_id: string | null
+  runner_id: string
+  status: string
+  prompt: string | null
+  exit_code: number | null
+  error: string | null
+  started_at: string
+  finished_at: string | null
+}
+
+export async function fetchRuns(taskId: number): Promise<Run[]> {
+  return api(`/tasks/${taskId}/runs`)
 }
 
 // --- Updates ---

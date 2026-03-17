@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from typing import Optional
 
-from app.models import Message, MessageDirection, Task, TaskStatus, Update, UpdateType
+from app.models import (
+    Message,
+    MessageDirection,
+    RuntimeStatus,
+    Task,
+    TaskStatus,
+    Update,
+    UpdateType,
+)
 from app.services.agent import AgentService
 
 
@@ -19,31 +28,36 @@ class BaseAgentAdapter(ABC):
         raise NotImplementedError
 
     async def stop(self, task: Task) -> None:
-        if task.tmux_session:
-            await AgentService.kill(task.tmux_session)
-            task.tmux_session = None
+        runner_id = task.runner_id or AgentService.runner_id(task)
+        await AgentService.kill(runner_id)
+        task.runner_id = None
+        task.runtime_status = RuntimeStatus.stopped
+        task.workflow_status = TaskStatus.paused
         task.status = TaskStatus.paused
+        task.last_run_finished_at = datetime.now(timezone.utc)
 
     async def is_alive(self, task: Task) -> bool:
-        return bool(task.tmux_session) and await AgentService.is_alive(task.tmux_session)
+        runner_id = task.runner_id or AgentService.runner_id(task)
+        return await AgentService.is_alive(runner_id)
 
     async def capture_output(self, task: Task, lines: int = 50) -> str:
-        if not task.tmux_session:
-            return ""
-        return await AgentService.capture_output(task.tmux_session, lines)
+        runner_id = task.runner_id or AgentService.runner_id(task)
+        return await AgentService.capture_output(runner_id, lines)
 
     def finalize_records(self, task: Task, output: str) -> list[Update | Message]:
         records: list[Update | Message] = [
             Update(
                 task_id=task.id,
                 type=UpdateType.summary,
-                content=f"Agent session ended.\n\nLast output:\n{output}"
-                if output.strip()
-                else "Agent session ended.",
+                content="Agent run finished.",
             )
         ]
+        task.workflow_status = TaskStatus.needs_review
         task.status = TaskStatus.needs_review
-        task.tmux_session = None
+        task.runtime_status = RuntimeStatus.idle
+        task.last_run_finished_at = datetime.now(timezone.utc)
+        task.last_heartbeat_at = task.last_run_finished_at
+        task.runner_id = None
         return records
 
     def apply_post_run_state(self, task: Task) -> None:
