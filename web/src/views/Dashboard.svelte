@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import { fetchTasks, fetchRoles, type Task, type Role } from '../lib/api'
-  import { tasks, roles, navigate, clearAuth, showToast } from '../lib/stores.svelte'
+  import { fetchObjectives, fetchTasks, fetchRoles } from '../lib/api'
+  import { objectives, tasks, roles, navigate, clearAuth, showToast } from '../lib/stores.svelte'
   import { onWsMessage, disconnectWS } from '../lib/ws'
   import { roleVisuals } from '../lib/roles'
   import { timeAgo, repoShortName, threadState } from '../lib/utils'
@@ -11,13 +11,12 @@
 
   let loading = $state(true)
 
-  // Derived stats
   const running = $derived(tasks.list.filter(t => t.runtime_status === 'running').length)
-  const review = $derived(tasks.list.filter(t => t.workflow_status === 'needs_review').length)
-  const completed = $derived(tasks.list.filter(t => t.workflow_status === 'completed').length)
+  const review = $derived(tasks.list.filter(t => t.workflow_state === 'needs_review').length)
+  const completed = $derived(tasks.list.filter(t => t.workflow_state === 'completed').length)
   const total = $derived(tasks.list.length)
+  const openObjectives = $derived(objectives.list.filter(o => !['completed', 'failed', 'cancelled'].includes(o.objective_state)).length)
 
-  // Role distribution
   const roleCounts = $derived(() => {
     const counts: Record<string, number> = {}
     for (const t of tasks.list) {
@@ -29,9 +28,10 @@
 
   async function load() {
     try {
-      const [t, r] = await Promise.all([fetchTasks(), fetchRoles()])
+      const [t, r, o] = await Promise.all([fetchTasks(), fetchRoles(), fetchObjectives()])
       tasks.list = t
       roles.list = r
+      objectives.list = o
     } catch (e: any) {
       showToast(e.message)
     } finally {
@@ -41,11 +41,15 @@
 
   const unsub = onWsMessage((data) => {
     if (data.type === 'task_update') {
-      const workflow = data.workflow_status ? `workflow ${data.workflow_status}` : null
-      const runtime = data.runtime_status ? `runtime ${data.runtime_status}` : null
+      const workflow = data.workflow_state ? `workflow ${data.workflow_state}` : data.workflow_status ? `workflow ${data.workflow_status}` : null
+      const runtime = data.runtime_state ? `runtime ${data.runtime_state}` : data.runtime_status ? `runtime ${data.runtime_status}` : null
       showToast(`Task #${data.task_id} — ${workflow || runtime || data.message}`)
     } else if (data.type === 'task_created') {
       showToast(`Created: ${data.title}`)
+    } else if (data.type === 'objective_created') {
+      showToast(`Objective launched: ${data.title}`)
+    } else if (data.type === 'decision_created') {
+      showToast('Orchestrator needs input')
     }
     load()
   })
@@ -61,13 +65,13 @@
 </script>
 
 <div class="dashboard">
-  <!-- Header -->
   <header class="header">
     <div class="header-left">
       <h1 class="logo">agents</h1>
       <ConnectionDot />
     </div>
     <div class="header-right">
+      <button class="btn btn-ghost" onclick={() => navigate('orchestrate')}>Objective</button>
       <button class="btn btn-ghost" onclick={logout}>Sign out</button>
       <button class="btn btn-accent" onclick={() => navigate('create')}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -76,8 +80,12 @@
     </div>
   </header>
 
-  <!-- Stats strip -->
   <div class="stats-strip">
+    <div class="stat">
+      <span class="stat-value" style="color: #8b4d2b;">{openObjectives}</span>
+      <span class="stat-label">objectives</span>
+    </div>
+    <div class="stat-sep"></div>
     <div class="stat">
       <span class="stat-value" style="color: #6b9a5c;">{running}</span>
       <span class="stat-label">running</span>
@@ -99,7 +107,44 @@
     </div>
   </div>
 
-  <!-- Role legend -->
+  <div class="mode-band">
+    <button class="mode-card mode-card-objective" onclick={() => navigate('orchestrate')}>
+      <div class="mode-kicker">Orchestration</div>
+      <div class="mode-title">Launch an objective</div>
+      <p>Give the system a broader goal. It can clarify requirements, spawn specialist agents, and keep coordinating the work.</p>
+    </button>
+    <button class="mode-card mode-card-task" onclick={() => navigate('create')}>
+      <div class="mode-kicker">Direct Dispatch</div>
+      <div class="mode-title">Create a single task</div>
+      <p>Use this when you already know the branch, target, and role you want one agent to handle.</p>
+    </button>
+  </div>
+
+  {#if objectives.list.length > 0}
+    <div class="objective-section">
+      <div class="section-head">
+        <h2>Objectives</h2>
+        <button class="text-link" onclick={() => navigate('orchestrate')}>New objective</button>
+      </div>
+      <div class="objective-list">
+        {#each objectives.list as objective}
+          <button class="objective-item" onclick={() => navigate('objective', objective.id)}>
+            <div class="objective-copy">
+              <div class="objective-title">{objective.title}</div>
+              <div class="objective-meta">
+                {objective.repo_url ? `${repoShortName(objective.repo_url)} · ` : ''}{objective.priority}
+              </div>
+              {#if objective.summary}
+                <p>{objective.summary}</p>
+              {/if}
+            </div>
+            <StatusBadge status={objective.objective_state} />
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
   {#if roles.list.length > 0}
     <div class="role-strip">
       {#each roles.list as role}
@@ -118,22 +163,23 @@
     </div>
   {/if}
 
-  <!-- Task list -->
   <div class="task-list">
     {#if loading}
       <p class="empty-text">Loading...</p>
     {:else if tasks.list.length === 0}
       <div class="empty-state">
         <div class="empty-icons">
-          {#each Object.entries(roleVisuals) as [name, v]}
+          {#each Object.entries(roleVisuals) as [_, v]}
             <svg width="28" height="28" viewBox="0 0 24 24" fill={v.color} opacity="0.3"><path d={v.icon} /></svg>
           {/each}
         </div>
-        <h2 class="empty-title">No agents running</h2>
-        <p class="empty-desc">Create a task to dispatch an AI coding agent. Choose a role to give it a specific personality and skillset.</p>
-        <button class="btn btn-accent" onclick={() => navigate('create')}>Create first task</button>
+        <h2 class="empty-title">No direct tasks yet</h2>
+        <p class="empty-desc">Start with an objective if you want the system to coordinate work, or create a direct task if you already know exactly what should run.</p>
       </div>
     {:else}
+      <div class="section-head tasks-head">
+        <h2>Direct Tasks</h2>
+      </div>
       {#each tasks.list as task (task.id)}
         {@const visual = roleVisuals[task.role_name || ''] || null}
         {@const runtime = threadState(task)}
@@ -159,7 +205,7 @@
               <span class="runtime-chip rc-{runtime.tone}">{runtime.label}</span>
             </div>
           </div>
-          <StatusBadge status={task.workflow_status} />
+          <StatusBadge status={task.workflow_state} />
         </button>
       {/each}
     {/if}
@@ -168,12 +214,11 @@
 
 <style>
   .dashboard {
-    max-width: 680px;
+    max-width: 860px;
     margin: 0 auto;
-    padding: 0 20px 40px;
+    padding: 0 20px 44px;
   }
 
-  /* Header */
   .header {
     padding: 20px 0 16px;
     display: flex;
@@ -181,16 +226,10 @@
     align-items: center;
   }
 
-  .header-left {
+  .header-left, .header-right {
     display: flex;
     align-items: center;
     gap: 10px;
-  }
-
-  .header-right {
-    display: flex;
-    gap: 8px;
-    align-items: center;
   }
 
   .logo {
@@ -202,7 +241,6 @@
     color: var(--text);
   }
 
-  /* Buttons */
   .btn {
     display: inline-flex;
     align-items: center;
@@ -216,32 +254,24 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-    white-space: nowrap;
   }
-  .btn:hover { background: var(--bg-raised); border-color: var(--text-faint); }
-  .btn:active { transform: scale(0.98); }
+  .btn:hover { background: var(--bg-raised); }
 
   .btn-accent {
     background: var(--accent);
     border-color: var(--accent);
     color: var(--bg);
-    font-weight: 600;
   }
-  .btn-accent:hover { opacity: 0.85; background: var(--accent); }
 
   .btn-ghost {
     border: none;
     color: var(--text-dim);
-    padding: 7px 10px;
+    padding-inline: 10px;
   }
-  .btn-ghost:hover { color: var(--text); background: transparent; }
 
-  /* Stats */
   .stats-strip {
     display: flex;
     align-items: center;
-    gap: 0;
     padding: 14px 0;
     border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
@@ -259,7 +289,6 @@
     font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.02em;
-    color: var(--text);
   }
 
   .stat-label {
@@ -275,13 +304,123 @@
     background: var(--border);
   }
 
-  /* Role strip */
+  .mode-band {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 12px;
+    padding: 18px 0 10px;
+  }
+
+  .mode-card {
+    text-align: left;
+    padding: 18px;
+    border-radius: 18px;
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .mode-card-objective {
+    background: linear-gradient(135deg, color-mix(in oklch, var(--bg-raised), #b66a42 14%), color-mix(in oklch, var(--bg), #8b4d2b 2%));
+    border-color: color-mix(in oklch, var(--border), #b66a42 32%);
+  }
+
+  .mode-card-task {
+    background: linear-gradient(180deg, var(--bg-raised), color-mix(in oklch, var(--bg), white 2%));
+  }
+
+  .mode-kicker {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--text-faint);
+  }
+
+  .mode-title {
+    margin-top: 8px;
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 1.55rem;
+  }
+
+  .mode-card p {
+    margin: 10px 0 0;
+    color: var(--text-dim);
+    line-height: 1.55;
+    max-width: 36ch;
+  }
+
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .section-head h2 {
+    margin: 0;
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: 1.45rem;
+    font-weight: 400;
+  }
+
+  .text-link {
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .objective-section {
+    padding-top: 8px;
+  }
+
+  .objective-list {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .objective-item {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 14px;
+    padding: 15px 0;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: none;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .objective-title {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .objective-meta {
+    margin-top: 4px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+
+  .objective-copy p {
+    margin: 8px 0 0;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
   .role-strip {
     display: flex;
     gap: 6px;
     padding: 12px 0;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
   .role-strip::-webkit-scrollbar { display: none; }
@@ -296,15 +435,17 @@
     font-size: 11px;
     white-space: nowrap;
     flex-shrink: 0;
-    transition: border-color 0.2s;
   }
 
   .role-chip-label { color: var(--text-dim); }
   .role-chip-count { font-weight: 600; }
 
-  /* Task list */
   .task-list {
-    padding-top: 4px;
+    padding-top: 6px;
+  }
+
+  .tasks-head {
+    margin-top: 10px;
   }
 
   .task-item {
@@ -318,12 +459,9 @@
     background: none;
     cursor: pointer;
     text-align: left;
-    font-family: var(--sans);
-    transition: opacity 0.15s;
     color: var(--text);
   }
-  .task-item:first-child { border-top: 1px solid var(--border); }
-  .task-item:hover { opacity: 0.75; }
+  .task-item:first-of-type { border-top: 1px solid var(--border); }
 
   .task-item-left {
     display: flex;
@@ -369,7 +507,6 @@
   .task-meta {
     font-size: 11px;
     color: var(--text-faint);
-    letter-spacing: 0.01em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -404,9 +541,8 @@
     background: var(--bg-raised);
   }
 
-  /* Empty state */
   .empty-state {
-    padding: 60px 0 40px;
+    padding: 56px 0 36px;
   }
 
   .empty-icons {
@@ -419,22 +555,24 @@
     font-family: 'Instrument Serif', Georgia, serif;
     font-size: 1.5rem;
     font-weight: 400;
-    font-style: italic;
-    color: var(--text-dim);
-    margin-bottom: 8px;
+    margin: 0 0 8px;
   }
 
   .empty-desc {
-    font-size: 14px;
-    color: var(--text-faint);
-    max-width: 380px;
+    color: var(--text-dim);
     line-height: 1.6;
-    margin-bottom: 20px;
+    max-width: 48ch;
   }
 
   .empty-text {
-    color: var(--text-faint);
-    font-size: 13px;
-    padding: 40px 0;
+    color: var(--text-dim);
+    padding: 18px 0;
+  }
+
+  @media (max-width: 760px) {
+    .dashboard { padding-inline: 16px; }
+    .mode-band { grid-template-columns: 1fr; }
+    .header { align-items: flex-start; gap: 12px; }
+    .header-right { flex-wrap: wrap; justify-content: flex-end; }
   }
 </style>

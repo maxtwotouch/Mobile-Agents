@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.database import get_db
-from app.models import RuntimeStatus, Task, TaskStatus, Update, UpdateType
+from app.models import RuntimeState, Task, Update, UpdateType, WorkflowState
 from app.schemas import UpdateCreate, UpdateOut
+from app.services.state import set_task_runtime_state, set_task_workflow_state
 from app.ws import broadcast
 
 router = APIRouter(prefix="/tasks/{task_id}/updates", tags=["updates"])
@@ -38,14 +39,14 @@ async def create_update(
         task.branch = body.branch
 
     if body.type == UpdateType.error:
-        task.workflow_status = TaskStatus.failed
-        task.status = TaskStatus.failed
-        task.runtime_status = RuntimeStatus.failed
+        set_task_workflow_state(task, WorkflowState.failed, force=True)
+        set_task_runtime_state(task, RuntimeState.failed)
+        task.failure_reason = body.content
 
     if body.type == UpdateType.summary:
-        task.workflow_status = TaskStatus.needs_review
-        task.status = TaskStatus.needs_review
-        task.runtime_status = RuntimeStatus.idle
+        set_task_workflow_state(task, WorkflowState.needs_review, force=True)
+        set_task_runtime_state(task, RuntimeState.idle)
+        task.result_summary = body.content
 
     await db.commit()
     await db.refresh(update)

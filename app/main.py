@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.auth import verify_token
 from app.database import engine, run_startup_migrations
 from app.models import Base
-from app.routers import auth, repos, roles, tasks, updates
+from app.routers import auth, decisions, objectives, repos, roles, tasks, updates
 from app.services.monitor import monitor_loop
 from app.ws import connect, disconnect
 
@@ -38,6 +38,8 @@ app = FastAPI(title="Mobile Agents", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router, prefix="/api")
 app.include_router(roles.router, prefix="/api")
 app.include_router(repos.router, prefix="/api")
+app.include_router(objectives.router, prefix="/api")
+app.include_router(decisions.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(updates.router, prefix="/api")
 

@@ -7,13 +7,15 @@ from typing import Optional
 from app.models import (
     Message,
     MessageDirection,
+    RuntimeState,
     RuntimeStatus,
     Task,
-    TaskStatus,
     Update,
     UpdateType,
+    WorkflowState,
 )
 from app.services.agent import AgentService
+from app.services.state import set_task_runtime_state, set_task_workflow_state
 
 
 class BaseAgentAdapter(ABC):
@@ -31,9 +33,8 @@ class BaseAgentAdapter(ABC):
         runner_id = task.runner_id or AgentService.runner_id(task)
         await AgentService.kill(runner_id)
         task.runner_id = None
-        task.runtime_status = RuntimeStatus.stopped
-        task.workflow_status = TaskStatus.paused
-        task.status = TaskStatus.paused
+        set_task_runtime_state(task, RuntimeState.stopped)
+        set_task_workflow_state(task, WorkflowState.waiting_for_user, force=True)
         task.last_run_finished_at = datetime.now(timezone.utc)
 
     async def is_alive(self, task: Task) -> bool:
@@ -52,12 +53,14 @@ class BaseAgentAdapter(ABC):
                 content="Agent run finished.",
             )
         ]
-        task.workflow_status = TaskStatus.needs_review
-        task.status = TaskStatus.needs_review
-        task.runtime_status = RuntimeStatus.idle
+        set_task_workflow_state(task, WorkflowState.needs_review, force=True)
+        set_task_runtime_state(task, RuntimeState.idle)
+        task.result_summary = "Agent run finished."
+        task.failure_reason = None
         task.last_run_finished_at = datetime.now(timezone.utc)
         task.last_heartbeat_at = task.last_run_finished_at
         task.runner_id = None
+        task.active_run_id = None
         return records
 
     def apply_post_run_state(self, task: Task) -> None:

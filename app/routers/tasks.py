@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shlex
 from datetime import datetime, timezone
 from typing import Optional
@@ -13,13 +14,23 @@ from app.database import get_db
 from app.models import (
     Message,
     MessageDirection,
+    Priority,
     Role,
     Run,
+    RunState,
+    RunTriggerType,
+    RuntimeState,
     RuntimeStatus,
     Task,
+    TargetType,
+    TaskKind,
     TaskStatus,
+    ThreadState,
     Update,
     UpdateType,
+    WorkflowState,
+    default_target_type,
+    infer_task_kind,
 )
 from app.schemas import (
     MessageCreate,
@@ -30,12 +41,20 @@ from app.schemas import (
 )
 from app.services.agent import AgentService
 from app.services.adapters import adapter_for
+from app.services.orchestration import build_role_prompt, handle_task_completion
 from app.services.repo import (
     get_commits,
     get_diff_stats,
     get_file_diff,
     _detect_default_branch,
     _git,
+)
+from app.services.state import (
+    infer_run_trigger,
+    mark_run_state,
+    set_task_runtime_state,
+    set_task_workflow_state,
+    sync_task_thread,
 )
 from app.ws import broadcast
 
@@ -55,16 +74,41 @@ async def _task_out(task: Task, db: AsyncSession) -> dict:
 
 
 async def _start_run_record(
-    db: AsyncSession, task: Task, prompt: Optional[str], runner_id: str
+    db: AsyncSession,
+    task: Task,
+    prompt: Optional[str],
+    runner_id: str,
+    *,
+    trigger_type: RunTriggerType,
 ) -> Run:
+    prompt_summary = prompt.strip()[:240] if prompt else None
     run = Run(
         task_id=task.id,
         thread_id=task.thread_id,
         runner_id=runner_id,
+        provider=task.agent_type,
+        trigger_type=trigger_type,
         status=RuntimeStatus.running,
+        run_state=RunState.running,
         prompt=prompt,
+        prompt_summary=prompt_summary,
+        dispatch_snapshot=json.dumps(
+            {
+                "task_kind": task.task_kind.value,
+                "target_type": task.target_type.value,
+                "branch": task.branch,
+                "base_branch": task.base_branch,
+                "commit_start": task.commit_start,
+                "commit_end": task.commit_end,
+                "path_scope": task.path_scope,
+                "workflow_state": task.workflow_state.value,
+                "runtime_state": task.runtime_state.value,
+            }
+        ),
     )
     db.add(run)
+    await db.flush()
+    task.active_run_id = run.id
     return run
 
 
@@ -76,6 +120,8 @@ async def _finish_active_run(
     runner_id: Optional[str] = None,
     exit_code: Optional[int] = None,
     error: Optional[str] = None,
+    error_type: Optional[str] = None,
+    output_summary: Optional[str] = None,
 ) -> None:
     runner_id = runner_id or task.runner_id
     if not runner_id:
@@ -89,10 +135,22 @@ async def _finish_active_run(
     run = result.scalars().first()
     if not run:
         return
-    run.status = status
-    run.exit_code = exit_code
-    run.error = error
+    mark_run_state(
+        run,
+        run_state=(
+            RunState.failed
+            if status == RuntimeStatus.failed
+            else RunState.cancelled
+            if status == RuntimeStatus.stopped
+            else RunState.completed
+        ),
+        exit_code=exit_code,
+        error=error,
+        error_type=error_type,
+        output_summary=output_summary,
+    )
     run.finished_at = datetime.now(timezone.utc)
+    task.active_run_id = None
 
 
 @router.post("", response_model=None, status_code=201)
@@ -101,15 +159,29 @@ async def create_task(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(require_auth),
 ):
+    role = await db.get(Role, body.role_id) if body.role_id else None
+    task_kind = body.task_kind or infer_task_kind(
+        body.agent_type, role.name if role else None
+    )
+    target_type = body.target_type or default_target_type(body.branch, body.base_branch)
     task = Task(
+        objective_id=body.objective_id,
         title=body.title,
         description=body.description,
         repo_url=body.repo_url,
         branch=body.branch,
         base_branch=body.base_branch,
         agent_type=body.agent_type,
+        task_kind=task_kind,
+        target_type=target_type,
+        priority=body.priority,
+        commit_start=body.commit_start,
+        commit_end=body.commit_end,
+        path_scope=body.path_scope,
         status=TaskStatus.pending,
         workflow_status=TaskStatus.pending,
+        workflow_state=WorkflowState.ready,
+        runtime_state=RuntimeState.idle,
         role_id=body.role_id,
     )
     db.add(task)
@@ -122,12 +194,15 @@ async def create_task(
 @router.get("", response_model=None)
 async def list_tasks(
     status: Optional[TaskStatus] = None,
+    objective_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
     user: str = Depends(require_auth),
 ):
     stmt = select(Task).order_by(Task.created_at.desc())
     if status:
         stmt = stmt.where(Task.workflow_status == status)
+    if objective_id is not None:
+        stmt = stmt.where(Task.objective_id == objective_id)
     result = await db.execute(stmt)
     tasks = result.scalars().all()
     return [await _task_out(t, db) for t in tasks]
@@ -156,14 +231,50 @@ async def patch_task(
     if not task:
         raise HTTPException(404, "Task not found")
     if body.workflow_status is not None:
-        task.workflow_status = body.workflow_status
-        task.status = body.workflow_status
+        mapping = {
+            TaskStatus.pending: WorkflowState.ready,
+            TaskStatus.paused: WorkflowState.waiting_for_user,
+            TaskStatus.needs_review: WorkflowState.needs_review,
+            TaskStatus.completed: WorkflowState.completed,
+            TaskStatus.failed: WorkflowState.failed,
+        }
+        set_task_workflow_state(task, mapping[body.workflow_status], force=True)
+    if body.workflow_state is not None:
+        set_task_workflow_state(task, body.workflow_state, force=True)
     if body.runtime_status is not None:
-        task.runtime_status = body.runtime_status
+        runtime_mapping = {
+            RuntimeStatus.idle: RuntimeState.idle,
+            RuntimeStatus.running: RuntimeState.running,
+            RuntimeStatus.stopped: RuntimeState.stopped,
+            RuntimeStatus.failed: RuntimeState.failed,
+        }
+        set_task_runtime_state(task, runtime_mapping[body.runtime_status])
+    if body.runtime_state is not None:
+        set_task_runtime_state(task, body.runtime_state)
+    if body.task_kind is not None:
+        task.task_kind = body.task_kind
+    if body.target_type is not None:
+        task.target_type = body.target_type
+    if body.priority is not None:
+        task.priority = body.priority
     if body.branch is not None:
         task.branch = body.branch
     if body.base_branch is not None:
         task.base_branch = body.base_branch
+    if body.commit_start is not None:
+        task.commit_start = body.commit_start
+    if body.commit_end is not None:
+        task.commit_end = body.commit_end
+    if body.path_scope is not None:
+        task.path_scope = body.path_scope
+    if body.blocked_reason is not None:
+        task.blocked_reason = body.blocked_reason
+    if body.result_summary is not None:
+        task.result_summary = body.result_summary
+    if body.failure_reason is not None:
+        task.failure_reason = body.failure_reason
+    if body.next_action_hint is not None:
+        task.next_action_hint = body.next_action_hint
     await db.commit()
     await db.refresh(task)
     await broadcast(
@@ -199,16 +310,11 @@ async def start_task(
     prompt = body.prompt if body else None
     adapter = adapter_for(task)
 
-    # Load role template if task has a role assigned
-    role_prompt = None
-    if task.role_id:
-        from app.services.roles import load_role_for_task, load_template
-
-        role = await load_role_for_task(db, task.role_id)
-        if role:
-            role_prompt = load_template(role.template_path)
+    role_prompt = await build_role_prompt(db, task)
 
     try:
+        set_task_runtime_state(task, RuntimeState.starting)
+        set_task_workflow_state(task, WorkflowState.in_progress)
         runner_id = await adapter.start(task, prompt=prompt, role_prompt=role_prompt)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
@@ -217,10 +323,17 @@ async def start_task(
             400, f"Agent CLI '{task.agent_type}' not found on this machine"
         )
     task.runner_id = runner_id
-    task.runtime_status = RuntimeStatus.running
+    set_task_runtime_state(task, RuntimeState.running)
     task.last_run_started_at = datetime.now(timezone.utc)
     task.last_heartbeat_at = task.last_run_started_at
-    await _start_run_record(db, task, prompt, runner_id)
+    await sync_task_thread(db, task, thread_state=ThreadState.active)
+    await _start_run_record(
+        db,
+        task,
+        prompt,
+        runner_id,
+        trigger_type=infer_run_trigger(task),
+    )
     await db.commit()
     await db.refresh(task)
     await broadcast(
@@ -289,11 +402,13 @@ async def get_output(
         run_status = (
             RuntimeStatus.failed if exit_code not in (0, None) else RuntimeStatus.idle
         )
-        for record in adapter.finalize_records(task, output):
+        records = adapter.finalize_records(task, output)
+        await handle_task_completion(db, task, records)
+        for record in records:
             db.add(record)
         if run_status == RuntimeStatus.failed:
-            task.workflow_status = TaskStatus.failed
-            task.status = TaskStatus.failed
+            set_task_workflow_state(task, WorkflowState.failed, force=True)
+            task.failure_reason = output.strip() or "Agent run failed"
             if output.strip():
                 db.add(
                     Update(
@@ -309,8 +424,21 @@ async def get_output(
             status=run_status,
             runner_id=finished_runner_id,
             exit_code=exit_code,
+            error=task.failure_reason,
+            error_type="agent_run_failed" if run_status == RuntimeStatus.failed else None,
+            output_summary=output.strip()[:500] if output else None,
         )
-        task.runtime_status = run_status
+        set_task_runtime_state(
+            task,
+            RuntimeState.failed if run_status == RuntimeStatus.failed else RuntimeState.idle,
+        )
+        await sync_task_thread(
+            db,
+            task,
+            thread_state=ThreadState.failed
+            if run_status == RuntimeStatus.failed
+            else ThreadState.idle,
+        )
         await db.commit()
         ended = True
 
@@ -361,8 +489,7 @@ async def approve_push(
             await db.commit()
             raise HTTPException(500, f"Push failed: {error_msg}")
 
-        task.workflow_status = TaskStatus.completed
-        task.status = TaskStatus.completed
+        set_task_workflow_state(task, WorkflowState.completed, force=True)
         update = Update(
             task_id=task.id,
             type=UpdateType.summary,
@@ -371,8 +498,7 @@ async def approve_push(
         )
         db.add(update)
     else:
-        task.workflow_status = TaskStatus.paused
-        task.status = TaskStatus.paused
+        set_task_workflow_state(task, WorkflowState.waiting_for_user, force=True)
         update = Update(
             task_id=task.id,
             type=UpdateType.summary,
@@ -496,10 +622,23 @@ async def send_message(
             new_runner = await adapter_for(task).send_message(task, body.content)
             if new_runner:
                 task.runner_id = new_runner
-            task.runtime_status = RuntimeStatus.running
+            set_task_workflow_state(task, WorkflowState.in_progress, force=True)
+            set_task_runtime_state(task, RuntimeState.running)
             task.last_run_started_at = datetime.now(timezone.utc)
             task.last_heartbeat_at = task.last_run_started_at
-            await _start_run_record(db, task, body.content, task.runner_id or AgentService.runner_id(task))
+            await sync_task_thread(
+                db,
+                task,
+                thread_state=ThreadState.active,
+                touch_message_time=True,
+            )
+            await _start_run_record(
+                db,
+                task,
+                body.content,
+                task.runner_id or AgentService.runner_id(task),
+                trigger_type=RunTriggerType.message,
+            )
         except RuntimeError as e:
             raise HTTPException(400, str(e))
 

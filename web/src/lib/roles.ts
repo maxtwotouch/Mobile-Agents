@@ -52,4 +52,11 @@ export const statusConfig: Record<string, { label: string; color: string }> = {
   needs_review: { label: 'Review',   color: '#c45c4a' },
   completed:    { label: 'Done',     color: '#5c8ab0' },
   failed:       { label: 'Failed',   color: '#c45c4a' },
+  draft:        { label: 'Draft',    color: '#8f846f' },
+  ready:        { label: 'Ready',    color: '#5c564e' },
+  in_progress:  { label: 'Working',  color: '#6b9a5c' },
+  waiting_for_user: { label: 'Waiting', color: '#c9a94e' },
+  blocked:      { label: 'Blocked',  color: '#c45c4a' },
+  approved:     { label: 'Approved', color: '#5c8ab0' },
+  cancelled:    { label: 'Cancelled', color: '#8f846f' },
 }

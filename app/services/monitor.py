@@ -5,9 +5,26 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.database import async_session
-from app.models import Run, RuntimeStatus, Task, TaskStatus, Update, UpdateType
+from app.models import (
+    Run,
+    RunState,
+    RuntimeState,
+    RuntimeStatus,
+    Task,
+    ThreadState,
+    Update,
+    UpdateType,
+    WorkflowState,
+)
 from app.services.agent import AgentService
 from app.services.adapters import adapter_for
+from app.services.orchestration import handle_task_completion
+from app.services.state import (
+    mark_run_state,
+    set_task_runtime_state,
+    set_task_workflow_state,
+    sync_task_thread,
+)
 from app.ws import broadcast
 
 logger = logging.getLogger("monitor")
@@ -47,11 +64,13 @@ async def monitor_loop():
                         except Exception:
                             pass
 
-                        for record in adapter.finalize_records(task, last_output):
+                        records = adapter.finalize_records(task, last_output)
+                        await handle_task_completion(db, task, records)
+                        for record in records:
                             db.add(record)
                         if run_status == RuntimeStatus.failed:
-                            task.workflow_status = TaskStatus.failed
-                            task.status = TaskStatus.failed
+                            set_task_workflow_state(task, WorkflowState.failed, force=True)
+                            task.failure_reason = last_output.strip() or "Agent run failed"
                             if last_output.strip():
                                 db.add(
                                     Update(
@@ -61,7 +80,17 @@ async def monitor_loop():
                                         branch=task.branch,
                                     )
                                 )
-                        task.runtime_status = run_status
+                        set_task_runtime_state(
+                            task,
+                            RuntimeState.failed if run_status == RuntimeStatus.failed else RuntimeState.idle,
+                        )
+                        await sync_task_thread(
+                            db,
+                            task,
+                            thread_state=ThreadState.failed
+                            if run_status == RuntimeStatus.failed
+                            else ThreadState.idle,
+                        )
                         stmt = (
                             select(Run)
                             .where(
@@ -73,8 +102,18 @@ async def monitor_loop():
                         result = await db.execute(stmt)
                         run = result.scalars().first()
                         if run:
-                            run.status = run_status
-                            run.exit_code = exit_code
+                            mark_run_state(
+                                run,
+                                run_state=RunState.failed
+                                if run_status == RuntimeStatus.failed
+                                else RunState.completed,
+                                exit_code=exit_code,
+                                error=task.failure_reason,
+                                error_type="agent_run_failed"
+                                if run_status == RuntimeStatus.failed
+                                else None,
+                                output_summary=last_output.strip()[:500] if last_output else None,
+                            )
                             run.finished_at = datetime.now(timezone.utc)
                         await db.commit()
 

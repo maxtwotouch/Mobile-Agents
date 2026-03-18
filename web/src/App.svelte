@@ -7,6 +7,8 @@
   import Dashboard from './views/Dashboard.svelte'
   import CreateTask from './views/CreateTask.svelte'
   import TaskDetail from './views/TaskDetail.svelte'
+  import CreateObjective from './views/CreateObjective.svelte'
+  import ObjectiveDetail from './views/ObjectiveDetail.svelte'
   import Toast from './components/Toast.svelte'
 
   onMount(async () => {
@@ -31,8 +33,12 @@
   <Dashboard />
 {:else if nav.view === 'create'}
   <CreateTask />
+{:else if nav.view === 'orchestrate'}
+  <CreateObjective />
 {:else if nav.view === 'detail' && nav.taskId}
   <TaskDetail taskId={nav.taskId} />
+{:else if nav.view === 'objective' && nav.objectiveId}
+  <ObjectiveDetail objectiveId={nav.objectiveId} />
 {/if}
 
 <Toast />

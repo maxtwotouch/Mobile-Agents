@@ -27,6 +27,27 @@ async def _git(cwd: str, *args: str) -> tuple[int, str, str]:
     return proc.returncode, stdout.decode(errors="replace").strip(), stderr.decode(errors="replace").strip()
 
 
+async def repo_has_commits(repo_path: str) -> bool:
+    code, _, _ = await _git(repo_path, "rev-parse", "--verify", "HEAD")
+    return code == 0
+
+
+async def ensure_branch_for_empty_repo(repo_path: str, branch: str) -> str:
+    code, current_branch, _ = await _git(repo_path, "symbolic-ref", "--short", "HEAD")
+    if code == 0 and current_branch == branch:
+        return branch
+
+    code, _, stderr = await _git(repo_path, "switch", "--orphan", branch)
+    if code == 0:
+        return branch
+
+    code, _, stderr = await _git(repo_path, "checkout", "--orphan", branch)
+    if code == 0:
+        return branch
+
+    raise RuntimeError(f"Failed to prepare empty repo branch: {stderr}")
+
+
 async def clone_repo(url: str, name: Optional[str] = None) -> dict:
     """Clone a remote repo into the workspace. Returns repo info dict."""
     workspace = _ensure_workspace()
@@ -144,6 +165,10 @@ async def create_worktree(repo_path: str, branch: str, task_id: int) -> str:
     """Create a git worktree for a task. Returns the worktree path."""
     workspace = _ensure_workspace()
     worktree_dir = workspace / ".worktrees" / f"task-{task_id}"
+
+    if not await repo_has_commits(repo_path):
+        await ensure_branch_for_empty_repo(repo_path, branch)
+        return repo_path
 
     # Clean up existing worktree if it exists. A previous crash can leave
     # behind an orphaned directory that is no longer registered with git.

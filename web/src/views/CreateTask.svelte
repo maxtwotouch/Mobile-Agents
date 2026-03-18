@@ -15,7 +15,34 @@
   let baseBranch = $state('')
   let agentType = $state('claude')
   let roleId = $state<number | null>(null)
+  let taskKind = $state('investigate')
+  let targetType = $state('repo_head')
+  let priority = $state('medium')
+  let commitStart = $state('')
+  let commitEnd = $state('')
+  let pathScope = $state('')
   let creating = $state(false)
+
+  const taskKindOptions = [
+    ['implement', 'Implement'],
+    ['review', 'Review'],
+    ['audit', 'Audit'],
+    ['investigate', 'Investigate'],
+    ['fix', 'Fix'],
+    ['refactor', 'Refactor'],
+    ['qa', 'QA'],
+    ['release', 'Release'],
+    ['orchestrate', 'Orchestrate'],
+  ] as const
+
+  const targetTypeOptions = [
+    ['repo_head', 'Repo head'],
+    ['branch_diff', 'Branch diff'],
+    ['commit_range', 'Commit range'],
+    ['workspace_changes', 'Workspace changes'],
+    ['file_scope', 'File scope'],
+    ['issue_followup', 'Issue follow-up'],
+  ] as const
 
   const selectedRepoData = $derived(repos.find((repo) => repo.path === selectedRepo) || null)
   const availableBranches = $derived(selectedRepoData?.branches || [])
@@ -34,7 +61,7 @@
     selectedRepo = selectedRepo === path ? null : path
     const repo = repos.find((r) => r.path === path)
     baseBranch = repo?.default_branch || ''
-    branch = ''
+    branch = targetType === 'branch_diff' ? '' : branch
   }
 
   async function handleClone() {
@@ -67,6 +94,12 @@
         base_branch: baseBranch.trim() || null,
         agent_type: agentType,
         role_id: roleId,
+        task_kind: taskKind,
+        target_type: targetType,
+        priority,
+        commit_start: commitStart.trim() || null,
+        commit_end: commitEnd.trim() || null,
+        path_scope: pathScope.trim() || null,
       })
       navigate('dashboard')
     } catch (e: any) {
@@ -159,29 +192,79 @@
     </div>
   </div>
 
-  <!-- Branch targeting -->
-  <div class="row-2">
+  <div class="row-3">
     <div class="field">
-      <label for="c-branch">Focus Branch</label>
-      <select id="c-branch" class="input select" bind:value={branch} disabled={!selectedRepoData}>
-        <option value="">Create new task branch</option>
-        {#each availableBranches as repoBranch}
-          <option value={repoBranch}>{repoBranch}</option>
+      <label for="c-kind">Task kind</label>
+      <select id="c-kind" class="input select" bind:value={taskKind}>
+        {#each taskKindOptions as [value, label]}
+          <option value={value}>{label}</option>
         {/each}
       </select>
-      <p class="hint">Pick an existing branch to review or continue, or leave blank to create a new task branch.</p>
     </div>
     <div class="field">
-      <label for="c-base-branch">Base Branch</label>
-      <select id="c-base-branch" class="input select" bind:value={baseBranch} disabled={!selectedRepoData}>
-        <option value="">Auto-detect</option>
-        {#each availableBranches as repoBranch}
-          <option value={repoBranch}>{repoBranch}</option>
+      <label for="c-target-type">Target type</label>
+      <select id="c-target-type" class="input select" bind:value={targetType}>
+        {#each targetTypeOptions as [value, label]}
+          <option value={value}>{label}</option>
         {/each}
       </select>
-      <p class="hint">This is the branch diffs and reviews compare against.</p>
+    </div>
+    <div class="field">
+      <label for="c-priority">Priority</label>
+      <select id="c-priority" class="input select" bind:value={priority}>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
     </div>
   </div>
+
+  <!-- Branch targeting -->
+  {#if targetType === 'branch_diff'}
+    <div class="row-2">
+      <div class="field">
+        <label for="c-branch">Focus Branch</label>
+        <select id="c-branch" class="input select" bind:value={branch} disabled={!selectedRepoData}>
+          <option value="">Create new task branch</option>
+          {#each availableBranches as repoBranch}
+            <option value={repoBranch}>{repoBranch}</option>
+          {/each}
+        </select>
+        <p class="hint">Pick the branch to review or continue. Leave blank to create a new task branch.</p>
+      </div>
+      <div class="field">
+        <label for="c-base-branch">Base Branch</label>
+        <select id="c-base-branch" class="input select" bind:value={baseBranch} disabled={!selectedRepoData}>
+          <option value="">Auto-detect</option>
+          {#each availableBranches as repoBranch}
+            <option value={repoBranch}>{repoBranch}</option>
+          {/each}
+        </select>
+        <p class="hint">This is the baseline for diff and review scope.</p>
+      </div>
+    </div>
+  {/if}
+
+  {#if targetType === 'commit_range'}
+    <div class="row-2">
+      <div class="field">
+        <label for="c-commit-start">Commit start</label>
+        <input id="c-commit-start" class="input" bind:value={commitStart} placeholder="Older SHA" />
+      </div>
+      <div class="field">
+        <label for="c-commit-end">Commit end</label>
+        <input id="c-commit-end" class="input" bind:value={commitEnd} placeholder="Newer SHA or HEAD" />
+      </div>
+    </div>
+  {/if}
+
+  {#if targetType === 'file_scope'}
+    <div class="field">
+      <label for="c-path-scope">Path scope</label>
+      <input id="c-path-scope" class="input" bind:value={pathScope} placeholder="pkg/aika, cmd/app, README.md" />
+      <p class="hint">Limit the task to one file or subtree.</p>
+    </div>
+  {/if}
 
   <!-- Agent type -->
   <div class="row-2">
@@ -354,6 +437,7 @@
     color: var(--text-faint);
     text-align: center;
     line-height: 1.3;
+    line-clamp: 2;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -362,6 +446,7 @@
 
   /* Layout */
   .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 
   .btn {
     display: inline-flex;
@@ -393,4 +478,8 @@
   .btn-accent:disabled { opacity: 0.5; cursor: wait; }
 
   .btn-full { width: 100%; justify-content: center; padding: 11px; font-size: 14px; }
+
+  @media (max-width: 720px) {
+    .row-2, .row-3 { grid-template-columns: 1fr; }
+  }
 </style>

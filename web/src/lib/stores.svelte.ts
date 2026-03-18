@@ -1,4 +1,4 @@
-import type { Task, Role } from './api'
+import type { Objective, Task, Role } from './api'
 
 // --- Auth ---
 export const token = $state<{ value: string | null }>({ value: localStorage.getItem('ma_token') })
@@ -16,6 +16,7 @@ export function clearAuth() {
 
 // --- App state ---
 export const tasks = $state<{ list: Task[] }>({ list: [] })
+export const objectives = $state<{ list: Objective[] }>({ list: [] })
 export const roles = $state<{ list: Role[] }>({ list: [] })
 export const wsConnected = $state<{ value: boolean }>({ value: false })
 export const toastMsg = $state<{ value: string; visible: boolean }>({ value: '', visible: false })
@@ -29,10 +30,11 @@ export function showToast(msg: string) {
 }
 
 // --- Navigation ---
-export type View = 'login' | 'dashboard' | 'create' | 'detail'
-export const nav = $state<{ view: View; taskId: number | null }>({ view: 'login', taskId: null })
+export type View = 'login' | 'dashboard' | 'create' | 'detail' | 'orchestrate' | 'objective'
+export const nav = $state<{ view: View; taskId: number | null; objectiveId: number | null }>({ view: 'login', taskId: null, objectiveId: null })
 
-export function navigate(view: View, taskId?: number) {
+export function navigate(view: View, id?: number) {
   nav.view = view
-  nav.taskId = taskId ?? null
+  nav.taskId = view === 'detail' ? id ?? null : null
+  nav.objectiveId = view === 'objective' ? id ?? null : null
 }

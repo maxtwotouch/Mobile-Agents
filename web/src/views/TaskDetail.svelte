@@ -24,8 +24,14 @@
   let outputInterval: ReturnType<typeof setInterval> | null = null
   let msgInput = $state('')
   let resumePrompt = $state('')
+  let taskKindDraft = $state('investigate')
+  let targetTypeDraft = $state('repo_head')
+  let priorityDraft = $state('medium')
   let branchDraft = $state('')
   let baseBranchDraft = $state('')
+  let commitStartDraft = $state('')
+  let commitEndDraft = $state('')
+  let pathScopeDraft = $state('')
 
   // Review state
   let showReview = $state(false)
@@ -37,11 +43,30 @@
 
   const visual = $derived(task?.role_name ? roleVisuals[task.role_name] || null : null)
   const isCodex = $derived(task?.agent_type === 'codex')
-  const canResume = $derived(isCodex && task?.thread_id && ['paused', 'needs_review', 'failed'].includes(task?.workflow_status || ''))
-  const canStart = $derived(['pending', 'paused', 'needs_review', 'failed'].includes(task?.workflow_status || ''))
+  const canResume = $derived(isCodex && task?.thread_id && ['waiting_for_user', 'needs_review', 'failed'].includes(task?.workflow_state || ''))
+  const canStart = $derived(['ready', 'waiting_for_user', 'needs_review', 'failed'].includes(task?.workflow_state || ''))
   const runtime = $derived(task ? threadState(task) : null)
   const taskRepo = $derived(task ? repos.find((repo) => repo.path === task?.repo_url) || null : null)
   const branchOptions = $derived(taskRepo?.branches || [])
+  const taskKindOptions = [
+    ['implement', 'Implement'],
+    ['review', 'Review'],
+    ['audit', 'Audit'],
+    ['investigate', 'Investigate'],
+    ['fix', 'Fix'],
+    ['refactor', 'Refactor'],
+    ['qa', 'QA'],
+    ['release', 'Release'],
+    ['orchestrate', 'Orchestrate'],
+  ] as const
+  const targetTypeOptions = [
+    ['repo_head', 'Repo head'],
+    ['branch_diff', 'Branch diff'],
+    ['commit_range', 'Commit range'],
+    ['workspace_changes', 'Workspace changes'],
+    ['file_scope', 'File scope'],
+    ['issue_followup', 'Issue follow-up'],
+  ] as const
 
   async function load() {
     try {
@@ -58,8 +83,14 @@
       runs = r
       repos = repoList
       const repo = repoList.find((entry) => entry.path === t.repo_url) || null
+      taskKindDraft = t.task_kind || 'investigate'
+      targetTypeDraft = t.target_type || 'repo_head'
+      priorityDraft = t.priority || 'medium'
       branchDraft = t.branch || ''
       baseBranchDraft = t.base_branch || repo?.default_branch || ''
+      commitStartDraft = t.commit_start || ''
+      commitEndDraft = t.commit_end || ''
+      pathScopeDraft = t.path_scope || ''
 
       if (t.runtime_status === 'running') {
         refreshOutput()
@@ -108,18 +139,24 @@
 
   async function handleComplete() {
     try {
-      await patchTask(taskId, { workflow_status: 'completed' })
+      await patchTask(taskId, { workflow_state: 'completed' })
       await load()
     } catch (e: any) { showToast(e.message) }
   }
 
-  async function saveBranches() {
+  async function saveTargeting() {
     try {
       await patchTask(taskId, {
+        task_kind: taskKindDraft,
+        target_type: targetTypeDraft,
+        priority: priorityDraft,
         branch: branchDraft || null,
         base_branch: baseBranchDraft || null,
+        commit_start: commitStartDraft || null,
+        commit_end: commitEndDraft || null,
+        path_scope: pathScopeDraft || null,
       })
-      showToast('Branch target updated')
+      showToast('Task targeting updated')
       await load()
     } catch (e: any) { showToast(e.message) }
   }
@@ -186,7 +223,7 @@
         <div class="detail-header-text">
           <div class="detail-title-row">
             <h1 class="detail-title">{task.title}</h1>
-            <StatusBadge status={task.workflow_status} />
+            <StatusBadge status={task.workflow_state} />
           </div>
           {#if runtime}
             <div class="runtime-row">
@@ -201,6 +238,8 @@
           {/if}
           <div class="detail-meta">
             {task.agent_type}{task.role_name ? ` · ${task.role_name}` : ''}
+            · {task.task_kind}
+            · {task.target_type}
             · {repoShortName(task.repo_url)}
             · {task.branch || 'branch pending'}
             {task.base_branch ? ` (from ${task.base_branch})` : ''}
@@ -219,7 +258,7 @@
       {#if task.runtime_status === 'running'}
         <button class="btn btn-danger" onclick={handleStop}>Stop</button>
       {/if}
-      {#if task.workflow_status === 'needs_review'}
+      {#if task.workflow_state === 'needs_review'}
         {#if task.branch}
           <button class="btn btn-approve" onclick={openReview}>Review changes</button>
         {/if}
@@ -228,28 +267,78 @@
     </div>
 
     <div class="section">
-      <span class="section-label">Branch Target</span>
-      <div class="row-2">
+      <span class="section-label">Task Targeting</span>
+      <div class="row-3">
         <div class="field-tight">
-          <label for="t-branch">Focus Branch</label>
-          <select id="t-branch" class="input select" bind:value={branchDraft}>
-            <option value="">Create new task branch</option>
-            {#each branchOptions as repoBranch}
-              <option value={repoBranch}>{repoBranch}</option>
+          <label for="t-kind">Task Kind</label>
+          <select id="t-kind" class="input select" bind:value={taskKindDraft}>
+            {#each taskKindOptions as [value, label]}
+              <option value={value}>{label}</option>
             {/each}
           </select>
         </div>
         <div class="field-tight">
-          <label for="t-base-branch">Base Branch</label>
-          <select id="t-base-branch" class="input select" bind:value={baseBranchDraft}>
-            <option value="">Auto-detect</option>
-            {#each branchOptions as repoBranch}
-              <option value={repoBranch}>{repoBranch}</option>
+          <label for="t-target-type">Target Type</label>
+          <select id="t-target-type" class="input select" bind:value={targetTypeDraft}>
+            {#each targetTypeOptions as [value, label]}
+              <option value={value}>{label}</option>
             {/each}
+          </select>
+        </div>
+        <div class="field-tight">
+          <label for="t-priority">Priority</label>
+          <select id="t-priority" class="input select" bind:value={priorityDraft}>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
           </select>
         </div>
       </div>
-      <button class="btn btn-sm" onclick={saveBranches}>Save branch target</button>
+
+      {#if targetTypeDraft === 'branch_diff'}
+        <div class="row-2">
+          <div class="field-tight">
+            <label for="t-branch">Focus Branch</label>
+            <select id="t-branch" class="input select" bind:value={branchDraft}>
+              <option value="">Create new task branch</option>
+              {#each branchOptions as repoBranch}
+                <option value={repoBranch}>{repoBranch}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="field-tight">
+            <label for="t-base-branch">Base Branch</label>
+            <select id="t-base-branch" class="input select" bind:value={baseBranchDraft}>
+              <option value="">Auto-detect</option>
+              {#each branchOptions as repoBranch}
+                <option value={repoBranch}>{repoBranch}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
+      {/if}
+
+      {#if targetTypeDraft === 'commit_range'}
+        <div class="row-2">
+          <div class="field-tight">
+            <label for="t-commit-start">Commit Start</label>
+            <input id="t-commit-start" class="input" bind:value={commitStartDraft} placeholder="Older SHA" />
+          </div>
+          <div class="field-tight">
+            <label for="t-commit-end">Commit End</label>
+            <input id="t-commit-end" class="input" bind:value={commitEndDraft} placeholder="Newer SHA or HEAD" />
+          </div>
+        </div>
+      {/if}
+
+      {#if targetTypeDraft === 'file_scope'}
+        <div class="field-tight">
+          <label for="t-path-scope">Path Scope</label>
+          <input id="t-path-scope" class="input" bind:value={pathScopeDraft} placeholder="pkg/aika, cmd/app, README.md" />
+        </div>
+      {/if}
+
+      <button class="btn btn-sm" onclick={saveTargeting}>Save targeting</button>
     </div>
 
     {#if canResume}
@@ -569,6 +658,12 @@
     gap: 12px;
   }
 
+  .row-3 {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+
   .field-tight {
     display: flex;
     flex-direction: column;
@@ -593,6 +688,12 @@
     color: var(--text);
     font-family: var(--sans);
     font-size: 14px;
+  }
+
+  @media (max-width: 720px) {
+    .row-2, .row-3 {
+      grid-template-columns: 1fr;
+    }
   }
 
   .select {
